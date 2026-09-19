@@ -8,44 +8,99 @@
 <body>
   <header>
     <h1>XCast</h1>
-    <span id="status" role="status" aria-live="polite"></span>
+    <button id="gear" type="button" class="icon-btn" aria-label="Settings" title="Settings" aria-expanded="false" aria-controls="settings">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="5.5"/>
+        <circle class="teeth" cx="12" cy="12" r="8.25"/>
+      </svg>
+    </button>
   </header>
+  <div id="status" role="status" aria-live="polite"></div>
 
-  <section>
-    <label for="device">TV</label>
-    <div class="row">
-      <select id="device"></select>
-      <button id="rescan" type="button" aria-label="Search for TVs again" title="Search again">↻</button>
+  <section id="settings" class="drawer" aria-label="Settings" hidden>
+    <div class="setting" title="One Chrome permission, once: XCast may then look for video on every HTTPS site and inside embedded players without asking per site. Its code still only reads a page when you click the icon. Switch off to go back to asking per site.">
+      <div class="setting-text">
+        <label for="auto">Automatic on all sites</label>
+        <p id="autoHint" class="hint">No per-site prompts; gives XCast access to every HTTPS page.</p>
+      </div>
+      <input id="auto" type="checkbox" role="switch" class="switch" aria-describedby="autoHint">
+    </div>
+    <div class="setting" title="The TV never contacts the site: it sees only this computer (and its VPN, if you use one). Uses this computer's bandwidth while playing.">
+      <div class="setting-text">
+        <label for="relay">Private relay</label>
+        <p id="relayHint" class="hint">The site never sees the TV; uses this computer's connection.</p>
+      </div>
+      <input id="relay" type="checkbox" role="switch" class="switch" aria-describedby="relayHint">
     </div>
   </section>
 
-  <section>
-    <div class="label">Video</div>
-    <ul id="streams"></ul>
-    <button id="grantSite" type="button" class="link" hidden></button>
-  </section>
-
-  <label class="check" title="One Chrome permission, once: XCast may then look for video on every HTTPS site and inside embedded players without asking per site. Its code still only reads a page when you click the icon. Switch off to go back to asking per site.">
-    <input id="auto" type="checkbox"> Automatic on all sites (no per-site prompts)
-  </label>
-  <label class="check" title="The TV never contacts the site: it sees only this computer (and its VPN, if you use one). Uses this computer's bandwidth while playing.">
-    <input id="relay" type="checkbox"> Private relay (hide the TV from the site)
-  </label>
-  <button id="cast" type="button" class="primary" disabled>Cast</button>
-  <button id="action" type="button" class="link" hidden></button>
-
-  <section id="controls" hidden>
-    <div class="row">
-      <button type="button" data-seek="-10" aria-label="Back 10 seconds">−10s</button>
-      <button type="button" id="playPause">Pause</button>
-      <button type="button" data-seek="30" aria-label="Forward 30 seconds">+30s</button>
-      <button type="button" id="stop">Stop</button>
+  <div id="choose" class="view">
+    <div class="field">
+      <label class="label" for="device">TV</label>
+      <div class="row">
+        <select id="device"></select>
+        <button id="rescan" type="button" class="icon-btn" aria-label="Search for TVs again" title="Search for TVs again">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 12a8 8 0 1 1-2.3-5.6L20 8.7"/>
+            <path d="M20 4v4.7h-4.7"/>
+          </svg>
+        </button>
+      </div>
     </div>
-    <div class="row">
-      <label for="volume" class="inline">Vol</label>
+
+    <div class="field" role="group" aria-labelledby="streamsLabel">
+      <div class="label" id="streamsLabel">Video on this page</div>
+      <ul id="streams"></ul>
+      <button id="grantSite" type="button" class="link" hidden></button>
+    </div>
+
+    <button id="cast" type="button" class="primary" disabled>Cast</button>
+    <button id="action" type="button" class="link" hidden></button>
+    <button id="backToPlaying" type="button" class="link" hidden>Back to what is playing</button>
+  </div>
+
+  <section id="controls" class="view" aria-label="Now playing" hidden>
+    <div class="np-head">
+      <span id="tvName" class="tv-name">TV</span>
+      <span id="pill" class="pill"><span class="dot" aria-hidden="true"></span><span id="pillText">Starting</span></span>
+    </div>
+
+    <div class="seek">
+      <div id="progress" class="progress" role="slider" tabindex="0" aria-label="Playback position" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="--:--" aria-disabled="true">
+        <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+      </div>
+      <div class="times"><span id="timeNow">--:--</span><span id="timeTotal"></span></div>
+    </div>
+
+    <div class="transport">
+      <button type="button" class="icon-btn seek-btn" data-seek="-10" aria-label="Back 10 seconds" title="Back 10 seconds">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 7l-5 5 5 5M18 7l-5 5 5 5"/></svg>
+        <span aria-hidden="true">10</span>
+      </button>
+      <button type="button" id="playPause" class="icon-btn play-btn" aria-label="Pause" title="Pause">
+        <svg id="iconPlay" class="icon" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M8 5v14l11-7z"/></svg>
+        <svg id="iconPause" class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5" width="3.5" height="14" rx="1"/><rect x="14" y="5" width="3.5" height="14" rx="1"/></svg>
+      </button>
+      <button type="button" class="icon-btn seek-btn" data-seek="30" aria-label="Forward 30 seconds" title="Forward 30 seconds">
+        <span aria-hidden="true">30</span>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 7l5 5-5 5M6 7l5 5-5 5"/></svg>
+      </button>
+      <button type="button" id="stop" class="icon-btn" aria-label="Stop casting" title="Stop casting">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+      </button>
+    </div>
+
+    <div class="row volume-row">
+      <label for="volume" class="icon-label" title="Volume">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 9.5v5h3.5l4.5 4v-13l-4.5 4z"/>
+          <path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>
+        </svg>
+        <span class="sr-only">Volume</span>
+      </label>
       <input id="volume" type="range" min="0" max="1" step="0.05">
-      <span id="time"></span>
     </div>
+
     <details id="metrics" open>
       <summary>Stats for this cast</summary>
       <div class="tiles">
@@ -56,6 +111,8 @@
       <svg id="spark" viewBox="0 0 300 40" role="img" aria-label="Relay speed over the last minute"></svg>
       <p id="mTotals"></p>
     </details>
+
+    <button id="castOther" type="button" class="link">Cast something else</button>
   </section>
 
   <script src="popup.js" type="module"></script>

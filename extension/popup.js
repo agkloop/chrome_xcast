@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const state = { tab: null, streams: [], picked: 0, devices: new Map(), media: null, grant: null, action: null, allowLocal: new Set() };
+const state = { tab: null, streams: [], picked: 0, devices: new Map(), media: null, grant: null, action: null, allowLocal: new Set(), casting: false, tvName: '', mode: '' };
 
 // Runs inside the page (each frame). Must be self-contained: it is serialized.
 function detect() {
@@ -92,6 +92,33 @@ function score(s, order) {
 function setStatus(text, kind = '') {
   $('status').textContent = text;
   $('status').dataset.kind = kind;
+}
+
+// Two views: the form to pick and cast ('choose'), and the remote for the
+// running cast ('playing'). Switching views never touches playback.
+function setView(view) {
+  const focused = document.activeElement;
+  $('choose').hidden = view !== 'choose';
+  $('controls').hidden = view !== 'playing';
+  $('backToPlaying').hidden = !state.casting;
+  showTv();
+  // Keyboard users: do not leave the focus on a control that just disappeared.
+  if (focused?.closest?.('[hidden]')) $(view === 'playing' ? 'playPause' : 'device').focus();
+}
+
+// cast() knows the casting TV's name. After the popup is reopened mid-cast
+// the picker's selection (the TV last cast to) stands in for it.
+function showTv() {
+  if (state.casting && !state.tvName) state.tvName = state.devices.get($('device').value)?.name || '';
+  $('tvName').textContent = state.tvName || 'TV';
+}
+
+function castEnded() {
+  state.casting = false;
+  state.media = null;
+  state.tvName = state.mode = '';
+  setView('choose');
+  showPlayer();
 }
 
 async function send(msg) {
@@ -237,6 +264,7 @@ async function loadDevices() {
   renderDevices();
   if (lastDevice && state.devices.has(lastDevice)) $('device').value = lastDevice;
   updateCastButton();
+  showTv();
 }
 
 async function discover() {
@@ -322,7 +350,11 @@ async function cast() {
     d.known = true;
     chrome.storage.local.set({ lastDevice: d.id }).catch(() => {});
     setStatus(r.mode === 'direct' ? 'Playing on TV' : 'Playing on TV (relayed)', 'ok');
-    $('controls').hidden = false;
+    state.casting = true;
+    state.tvName = d.name;
+    state.mode = r.mode;
+    setView('playing');
+    showPlayer();
     chrome.scripting
       .executeScript({ target: { tabId: state.tab.id, frameIds: [s.frameId] }, func: () => document.querySelectorAll('video').forEach((v) => v.pause()) })
       .catch(() => {});
@@ -372,7 +404,7 @@ async function control(action, value) {
   try {
     await send({ cmd: 'control', action, value });
     if (action === 'stop') {
-      $('controls').hidden = true;
+      castEnded();
       setStatus('Stopped');
     }
   } catch (e) {
@@ -430,8 +462,13 @@ function showMetrics(m) {
   $('mStart').textContent = t.start;
   $('mTotals').textContent = t.totals;
   state.spark = [...(state.spark || []), m.mode === 'proxy' ? m.mbps : 0].slice(-60);
-  $('spark').hidden = m.mode !== 'proxy';
+  // An attribute, not the property: <svg> has no `hidden` property.
+  $('spark').toggleAttribute('hidden', m.mode !== 'proxy');
   if (m.mode === 'proxy') drawSpark(state.spark);
+  if (m.mode !== state.mode) {
+    state.mode = m.mode;
+    showPlayer();
+  }
 }
 
 function resetMetrics() {
@@ -442,12 +479,42 @@ function resetMetrics() {
   $('spark').replaceChildren();
 }
 
+const STATE_TEXT = new Map([['PLAYING', 'Playing'], ['PAUSED', 'Paused'], ['BUFFERING', 'Buffering'], ['IDLE', 'Idle']]);
+
+// Draws the remote from state.media (null: the TV has not reported yet).
+function showPlayer() {
+  const m = state.media || {};
+  const paused = m.state === 'PAUSED';
+  $('iconPlay').toggleAttribute('hidden', !paused);
+  $('iconPause').toggleAttribute('hidden', paused);
+  $('playPause').title = paused ? 'Play' : 'Pause';
+  $('playPause').setAttribute('aria-label', paused ? 'Play' : 'Pause');
+
+  const text = m.idleReason === 'FINISHED' ? 'Finished' : STATE_TEXT.get(m.state) || 'Starting';
+  const mode = state.mode === 'proxy' ? 'relayed' : state.mode === 'direct' ? 'direct' : '';
+  $('pill').dataset.state = STATE_TEXT.has(m.state) ? m.state.toLowerCase() : '';
+  $('pillText').textContent = mode ? `${text} · ${mode}` : text;
+
+  // No duration: a live stream (or not known yet). The bar is then inactive.
+  const total = m.duration > 0 && Number.isFinite(m.duration) ? m.duration : 0;
+  const now = Math.min(Math.max(Number(m.currentTime) || 0, 0), total);
+  const bar = $('progress');
+  $('progressFill').style.width = `${total ? (100 * now) / total : 0}%`;
+  bar.setAttribute('aria-disabled', String(!total));
+  bar.setAttribute('aria-valuemax', String(Math.round(total)));
+  bar.setAttribute('aria-valuenow', String(Math.round(now)));
+  bar.setAttribute('aria-valuetext', total ? `${fmt(m.currentTime)} of ${fmt(total)}` : fmt(m.currentTime));
+  $('timeNow').textContent = fmt(m.currentTime);
+  $('timeTotal').textContent = total ? fmt(total) : '';
+}
+
 function showMedia(m) {
   state.media = m;
-  $('controls').hidden = false;
-  $('playPause').textContent = m.state === 'PAUSED' ? 'Play' : 'Pause';
-  $('time').textContent = m.duration ? `${fmt(m.currentTime)} / ${fmt(m.duration)}` : fmt(m.currentTime);
+  showPlayer();
   if (m.state === 'IDLE' && m.idleReason) {
+    // Over for the service worker too: there is nothing to go back to.
+    state.casting = false;
+    $('backToPlaying').hidden = true;
     setStatus(m.idleReason === 'FINISHED' ? 'Finished' : `TV stopped: ${m.idleReason.toLowerCase()}`, m.idleReason === 'ERROR' ? 'err' : '');
   }
 }
@@ -466,7 +533,7 @@ chrome.runtime.onMessage.addListener((m, sender) => {
   } else if (m.type === 'metrics') {
     showMetrics(m);
   } else if (m.type === 'disconnected') {
-    $('controls').hidden = true;
+    castEnded();
     if (typeof m.reason === 'string') setStatus(m.reason.slice(0, 200), 'err');
   }
 });
@@ -480,6 +547,27 @@ $('stop').addEventListener('click', () => control('stop'));
 $('playPause').addEventListener('click', () => control(state.media?.state === 'PAUSED' ? 'play' : 'pause'));
 $('volume').addEventListener('change', (e) => control('volume', Number(e.target.value)));
 for (const b of document.querySelectorAll('[data-seek]')) b.addEventListener('click', () => control('seekBy', Number(b.dataset.seek)));
+// The progress bar is a slider: click to jump, arrow keys for 10 s steps.
+// A live stream (no duration) cannot be seeked.
+const SEEK_KEYS = new Map([['ArrowLeft', -10], ['ArrowDown', -10], ['ArrowRight', 10], ['ArrowUp', 10]]);
+$('progress').addEventListener('click', (e) => {
+  const total = state.media?.duration;
+  if (!(total > 0)) return;
+  const box = e.currentTarget.getBoundingClientRect();
+  control('seek', Math.min(Math.max((e.clientX - box.left) / box.width, 0), 1) * total);
+});
+$('progress').addEventListener('keydown', (e) => {
+  if (!SEEK_KEYS.has(e.key) || !(state.media?.duration > 0)) return;
+  e.preventDefault();
+  control('seekBy', SEEK_KEYS.get(e.key));
+});
+$('gear').addEventListener('click', () => {
+  const open = $('settings').hidden;
+  $('settings').hidden = !open;
+  $('gear').setAttribute('aria-expanded', String(open));
+});
+$('castOther').addEventListener('click', () => setView('choose'));
+$('backToPlaying').addEventListener('click', () => setView('playing'));
 // Asks Chrome for site access. Must be called straight from a click: Chrome
 // only accepts the request during the click itself, so it goes first, before
 // any await. Until the user answers nothing else would change on screen, so
@@ -555,6 +643,10 @@ discover();
 scan().catch(() => renderStreams('XCast cannot read this page.'));
 send({ cmd: 'state' })
   .then((r) => {
+    if (r.active) {
+      state.casting = true;
+      setView('playing');
+    }
     if (r.active && r.media) showMedia(r.media);
     if (r.volume) $('volume').value = r.volume.level;
     if (r.active && r.metrics) showMetrics(r.metrics);
