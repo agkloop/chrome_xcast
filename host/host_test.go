@@ -54,6 +54,32 @@ func TestCastMessageRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCastMetrics(t *testing.T) {
+	m := newCastMetrics("proxy")
+	m.noteState("BUFFERING") // loading before the first frame is not a stall
+	m.noteState("PLAYING")
+	m.noteState("BUFFERING")
+	time.Sleep(30 * time.Millisecond)
+	m.noteState("PLAYING")
+	m.noteSeek()
+	m.noteState("BUFFERING") // caused by the seek: not a stall either
+	m.noteState("PLAYING")
+	m.noteState("PAUSED")
+	var sink strings.Builder
+	countingWriter{&sink, m}.Write(make([]byte, 125000))
+	snap := m.snapshot()
+	if snap["stalls"] != 1 || snap["stallMs"].(int64) < 25 || snap["bytes"].(int64) != 125000 || snap["mbps"].(float64) <= 0 {
+		t.Fatalf("snapshot = %v", snap)
+	}
+	if _, ok := snap["startMs"]; !ok {
+		t.Fatal("start time missing after the first PLAYING")
+	}
+	var none *castMetrics // direct mode and tests pass nil around freely
+	none.noteState("PLAYING")
+	none.noteTTFB(time.Second)
+	none.noteSeek()
+}
+
 func TestRealTrustAnchors(t *testing.T) {
 	pool := mustLoadRoots() // panics on a swapped or corrupted anchor
 	if pool.Equal(x509.NewCertPool()) {
@@ -171,6 +197,7 @@ func TestProxyEndToEnd(t *testing.T) {
 	}
 	defer p.Close()
 	s, _ := p.newSession(upst, dev)
+	s.m = newCastMetrics("proxy")
 	entry := p.entryURL(s, u, "hls")
 
 	get := func(raw string) (int, string, http.Header) {
@@ -224,6 +251,9 @@ func TestProxyEndToEnd(t *testing.T) {
 		t.Fatalf("playlist-injected private address fetched: %d", code)
 	}
 
+	if got := s.m.snapshot(); got["prefetchHits"].(int64) != 1 || got["retries"].(int64) < 1 || got["bytes"].(int64) < int64(len("SEGMENT")+len("SEGMENT2")) || got["errors"].(int64) < 1 {
+		t.Fatalf("relay metrics = %v", got)
+	}
 	// Tampering with the signed target must not grant anything.
 	parts := strings.Split(strings.TrimPrefix(entry, p.base+"/"), "/")
 	parts[2] = b64.EncodeToString([]byte("http://example.com/other.m3u8"))
