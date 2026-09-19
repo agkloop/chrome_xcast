@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "XCast",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Cast web video to your Chromecast, even on sites without a Cast button.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -30,5 +30,6 @@
   "incognito": "not_allowed",
   "externally_connectable": {
     "ids": []
-  }
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1EMdxgbTAM7qTBSENxDgIcB34C3jR0i6wH7K89k+seDCYdTv6LEekqVf7cv+Isnx02FRMpTxCxbuQATO2PsQJtjZu0KAMjDmk6LB62XxKILnJWbJV5tKarzhr7TE6xg6wDDZCW37lJiw28mZujqAIUIMnYzttCYA2v9XYBpIRRJAvxTo4rf4Q/ynreDnTO5oX8d2MwlK2PTrey4yJ7Co0urWd7bw0pE2giTjKVLM3QhSy9YoHJb+h9aKapZldvWmRZ7AIIcqnnDP4sfoHYKiXRxjqV0cDHIoo+Yl0j4qqqgqH5tVREHKTqJsbLYMoaBh9i8Ip3OYXVMc2aN1FJzbXQIDAQAB"
 }

@@ -4,9 +4,11 @@
 # deny-by-default macOS sandbox (xcast.sb).
 set -eu
 
-EXT_ID="${1:-}"
+# The extension's ID is fixed by the "key" in extension/manifest.json, so it is
+# the same on every computer. Pass another ID only if you changed that key.
+EXT_ID="${1:-khelfjkcpfdeeeiffeopogjohihedimo}"
 if ! printf '%s' "$EXT_ID" | grep -Eq '^[a-p]{32}$'; then
-  echo "usage: $0 <extension-id>   (32 letters a-p, from chrome://extensions)" >&2
+  echo "usage: $0 [extension-id]   (32 letters a-p, from chrome://extensions)" >&2
   exit 1
 fi
 if [ "$(id -u)" -eq 0 ]; then
@@ -38,7 +40,11 @@ done
 chmod 700 "$DEST" "$DEST/data"
 DEST=$(cd "$DEST" && pwd -P) # the sandbox matches real paths, not symlinks
 
-GO=$(command -v go) || { echo "Go is required: https://go.dev/dl/" >&2; exit 1; }
+GO=$(command -v go) || {
+  echo "XCast's helper is built from source on your computer, which needs Go." >&2
+  echo "Install it with:  brew install go    (or from https://go.dev/dl/), then run this again." >&2
+  exit 1
+}
 echo "Building with $GO (toolchain $TOOLCHAIN, fetched and checksum-verified if needed)"
 # Clean environment: no inherited GOFLAGS (-toolexec, -overlay), proxies or
 # toolchain overrides can alter what gets compiled.
@@ -98,4 +104,10 @@ echo "Installed:  $DEST/xcast-host"
 echo "SHA-256:    $(shasum -a 256 "$DEST/xcast-host" | cut -d' ' -f1)"
 echo "Allowed:    $ORIGIN"
 echo "Sandbox:    active (self-test passed)"
-echo "Find TVs:   \"$WRAPPER\" -discover"
+echo
+echo "Next:"
+echo "  1. chrome://extensions > Developer mode > Load unpacked > $ROOT/extension"
+echo "  2. Play a video, click the XCast icon, pick your TV, click Cast."
+echo "  3. The first time, macOS asks to let \"xcast-host\" find devices on your network: Allow."
+echo "     (System Settings > Privacy & Security > Local Network, if you missed it.)"
+echo "Check TVs from the terminal:  \"$WRAPPER\" -discover"

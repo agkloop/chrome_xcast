@@ -121,5 +121,4 @@ This touches the same function as issue 2, so fix them together.
 - **Same friendly name, new device id.** A different *genuine* Cast device advertising your TV's name is a first-use device, not a refused one. The popup marks it `new` and shows its IP. It does not yet ask for an explicit confirmation when a new device shares its name with one you already trust. `extension/popup.js`.
 - **Token length reveals URL length**, and identical URLs produce identical tokens. This is a deliberate trade-off to keep live playlists stable. `host/proxy.go`, `session.seal`.
 - **The helper's network fingerprint is Go's, not Chrome's.** A site that inspects TLS or HTTP/2 fingerprints can tell relay traffic from browser traffic.
-- **No fixed extension ID.** Add a `key` to `extension/manifest.json` so the ID survives moving the folder.
 - **Never exercised end to end.** The extension has not been loaded in Chrome, the installer has not been run, and nothing has been cast to a TV. Expect ordinary bugs there before any of the above matters.
