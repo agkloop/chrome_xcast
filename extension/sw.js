@@ -107,6 +107,10 @@ function onHostMessage(m) {
     armIdle();
   }
   if (m.type === 'media') {
+    // The TV gives the duration only with a video's first report, and a
+    // position only when something changes. Keep the one and date the other,
+    // so that a popup (also one opened later) can tell where playback is now.
+    m = { ...m, duration: m.duration ?? lastMedia?.duration, at: Date.now() };
     lastMedia = m;
     if (m.state === 'IDLE' && FINAL_IDLE.has(m.idleReason)) {
       active = false;

@@ -481,6 +481,15 @@ function resetMetrics() {
 
 const STATE_TEXT = new Map([['PLAYING', 'Playing'], ['PAUSED', 'Paused'], ['BUFFERING', 'Buffering'], ['IDLE', 'Idle']]);
 
+// The TV reports its position only when something changes. While it plays,
+// the time since that report (dated by the service worker) is added. NaN:
+// no position reported yet.
+function positionNow(m, total) {
+  if (!Number.isFinite(m.currentTime)) return NaN;
+  const since = m.state === 'PLAYING' && Number.isFinite(m.at) ? Math.max(Date.now() - m.at, 0) / 1000 : 0;
+  return Math.min(Math.max(m.currentTime + since, 0), total || Infinity);
+}
+
 // Draws the remote from state.media (null: the TV has not reported yet).
 function showPlayer() {
   const m = state.media || {};
@@ -497,16 +506,21 @@ function showPlayer() {
 
   // No duration: a live stream (or not known yet). The bar is then inactive.
   const total = m.duration > 0 && Number.isFinite(m.duration) ? m.duration : 0;
-  const now = Math.min(Math.max(Number(m.currentTime) || 0, 0), total);
+  const now = positionNow(m, total);
   const bar = $('progress');
-  $('progressFill').style.width = `${total ? (100 * now) / total : 0}%`;
+  $('progressFill').style.width = `${total ? (100 * (now || 0)) / total : 0}%`;
   bar.setAttribute('aria-disabled', String(!total));
   bar.setAttribute('aria-valuemax', String(Math.round(total)));
-  bar.setAttribute('aria-valuenow', String(Math.round(now)));
-  bar.setAttribute('aria-valuetext', total ? `${fmt(m.currentTime)} of ${fmt(total)}` : fmt(m.currentTime));
-  $('timeNow').textContent = fmt(m.currentTime);
+  bar.setAttribute('aria-valuenow', String(total ? Math.round(now || 0) : 0));
+  bar.setAttribute('aria-valuetext', total ? `${fmt(now)} of ${fmt(total)}` : fmt(now));
+  $('timeNow').textContent = fmt(now);
   $('timeTotal').textContent = total ? fmt(total) : '';
 }
+
+// Between the TV's reports the remote counts along by itself.
+setInterval(() => {
+  if (state.media?.state === 'PLAYING' && !$('controls').hidden) showPlayer();
+}, 500);
 
 function showMedia(m) {
   state.media = m;
