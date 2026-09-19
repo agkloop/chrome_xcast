@@ -1,0 +1,7 @@
+body.grant { width: auto; max-width: 520px; margin: 48px auto; padding: 0 16px; font-size: 15px; }
+body.grant h1 { font-size: 20px; margin-bottom: 12px; }
+body.grant button.primary { width: auto; padding: 10px 18px; }
+body.grant #result { min-height: 1.4em; margin-top: 14px; }
+body.grant #result[data-kind="ok"] { color: var(--ok); }
+body.grant #result[data-kind="err"] { color: var(--err); }
+body.grant .fine { color: var(--muted); font-size: 13px; margin-top: 24px; }

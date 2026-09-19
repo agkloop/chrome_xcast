@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lab 3: signed MP4 link</title>
+  <link rel="stylesheet" href="lab.css">
+</head>
+<body>
+  <main>
+    <p><a href="./">← test lab</a></p>
+    <h1>Signed, expiring MP4 link</h1>
+    <p>A plain <code>&lt;video src&gt;</code>, no player library. The address is protocol-relative and carries a signature and an expiry time; the file is only served with this site's Referer. Press play, then click XCast.</p>
+    <video id="vid" src="{{VIDEO_URL}}" controls playsinline></video>
+    <p id="state" role="status"></p>
+    <h2>What should happen</h2>
+    <ol>
+      <li>The popup lists the <code>.mp4</code> as a FILE stream.</li>
+      <li>Cast first answers that the video is on a device on your own network. Click <em>Cast from it anyway</em>.</li>
+      <li>The TV's own fetch gets 403 (no Referer), so XCast relays it (status: “Playing on TV (relayed)”).</li>
+      <li>Seeking on the TV works: the relay passes Range requests through.</li>
+    </ol>
+  </main>
+  <script>
+    const v = document.getElementById('vid');
+    const state = document.getElementById('state');
+    if (location.protocol === 'file:') state.textContent = 'Opened as a file: the link is only created by the lab server. Open the http:// address that server.py prints, ending in /mp4.html.';
+    v.addEventListener('loadedmetadata', () => (state.textContent = `Ready: ${Math.round(v.duration)} s of video.`));
+    v.addEventListener('error', () => (state.textContent = 'The video did not load. The signed link may have expired: reload the page for a fresh one.'));
+  </script>
+</body>
+</html>

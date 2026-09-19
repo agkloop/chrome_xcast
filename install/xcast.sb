@@ -1,0 +1,37 @@
+;; macOS sandbox for xcast-host: deny everything, then allow only what a
+;; network relay needs. The helper parses hostile input (playlists, mDNS,
+;; Cast replies); if a parser bug is ever exploited, the attacker lands in a
+;; process that cannot read your files, cannot start other programs and can
+;; write only to its own small data folder.
+(version 1)
+(deny default)
+(import "system.sb")
+
+(allow process-exec (literal (param "BIN")))
+(allow file-read* (literal (param "BIN")))
+;; macOS's certificate verifier looks up the program's own folder before it
+;; will check any TLS certificate. Metadata only (stat): no listing, no contents.
+(allow file-read-metadata (literal (param "DIR")))
+(allow file-read* file-write* (subpath (param "DATA")))
+
+;; DNS configuration and the system trust store (TLS to stream hosts).
+(allow file-read*
+  (literal "/private/etc/resolv.conf")
+  (literal "/private/etc/hosts")
+  (literal "/private/etc/ssl/cert.pem")
+  (subpath "/private/var/db/mds")
+  (subpath "/System/Library/Security")
+  (subpath "/System/Library/Keychains")
+  (subpath "/Library/Keychains"))
+(allow mach-lookup
+  (global-name "com.apple.mDNSResponder")
+  (global-name "com.apple.dnssd.service")
+  (global-name "com.apple.trustd.agent")
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.SystemConfiguration.configd")
+  (global-name "com.apple.networkd"))
+
+(allow system-socket)
+(allow network-outbound)
+(allow network-bind (local ip))
+(allow network-inbound (local tcp) (local udp))

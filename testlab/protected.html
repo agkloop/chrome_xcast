@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lab 2: hotlink-protected stream</title>
+  <link rel="stylesheet" href="lab.css">
+</head>
+<body>
+  <main>
+    <p><a href="./">← test lab</a></p>
+    <h1>Hotlink-protected stream</h1>
+    <p>Same shape as a typical embed player: the <code>&lt;video&gt;</code> has a <code>blob:</code> source and <code>disableremoteplayback</code>. Press play, then click XCast.</p>
+    <video id="v" class="jw-video jw-reset" controls playsinline webkit-playsinline disableremoteplayback></video>
+    <p id="state" role="status">Loading player…</p>
+    <h2>What should happen</h2>
+    <ol>
+      <li>The popup lists <code>stream.m3u8</code> from this computer's address.</li>
+      <li>Cast first answers that the video is on a device on your own network. Click <em>Cast from it anyway</em>.</li>
+      <li>The TV cannot fetch the stream itself (403 without this site's Referer), so XCast relays it (status: “Playing on TV (relayed)”).</li>
+      <li>In the server's terminal, segment requests come from <em>this computer</em> with this site's Referer, never from the TV.</li>
+    </ol>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+  <script>
+    const video = document.getElementById('v');
+    const state = document.getElementById('state');
+    if (location.protocol === 'file:') {
+      state.textContent = 'This page was opened as a file, so the stream cannot load. Start the lab server (python3 testlab/server.py) and open the http:// address it prints, ending in /protected.html.';
+    } else if (window.Hls && Hls.isSupported()) {
+      const hls = new Hls();
+      hls.loadSource('hls/stream.m3u8');
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => (state.textContent = `Ready. Video source is a blob: URL (${video.src.slice(0, 12)}…)`));
+      hls.on(Hls.Events.ERROR, (_, d) => {
+        if (!d.fatal) return;
+        const code = d.response?.code ? ` (HTTP ${d.response.code})` : '';
+        state.textContent = `Player error: ${d.details}${code}. The stream is only served to this site's own pages over http://.`;
+      });
+    } else {
+      state.textContent = window.Hls ? 'hls.js is not supported in this browser.' : 'The player script (cdn.jsdelivr.net) did not load. Check the internet connection or a content blocker.';
+    }
+  </script>
+</body>
+</html>

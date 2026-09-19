@@ -1,0 +1,10 @@
+# generated test media (recreate with testlab/make-media.sh)
+testlab/hls/
+testlab/v2/
+testlab/*.log
+testlab/__pycache__/
+
+# build output
+host/xcast-host
+*.test
+.DS_Store

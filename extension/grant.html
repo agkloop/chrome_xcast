@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>XCast: allow access</title>
+  <link rel="stylesheet" href="popup.css">
+  <link rel="stylesheet" href="grant.css">
+</head>
+<body class="grant">
+  <main>
+    <h1>XCast</h1>
+    <p id="what"></p>
+    <button id="allow" type="button" class="primary">Ask Chrome for access</button>
+    <p id="result" role="status" aria-live="polite"></p>
+    <p class="fine">XCast only reads the video address from that player, and only when you click its icon. You can remove this access at any time under chrome://extensions &gt; XCast &gt; Details &gt; Site access.</p>
+  </main>
+  <script src="grant.js" type="module"></script>
+</body>
+</html>

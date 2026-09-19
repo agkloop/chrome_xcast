@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>XCast</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>XCast</h1>
+    <span id="status" role="status" aria-live="polite"></span>
+  </header>
+
+  <section>
+    <label for="device">TV</label>
+    <div class="row">
+      <select id="device"></select>
+      <button id="rescan" type="button" aria-label="Search for TVs again" title="Search again">↻</button>
+    </div>
+  </section>
+
+  <section>
+    <div class="label">Video</div>
+    <ul id="streams"></ul>
+    <button id="grantSite" type="button" class="link" hidden></button>
+  </section>
+
+  <label class="check" title="One Chrome permission, once: XCast may then look for video on every HTTPS site and inside embedded players without asking per site. Its code still only reads a page when you click the icon. Switch off to go back to asking per site.">
+    <input id="auto" type="checkbox"> Automatic on all sites (no per-site prompts)
+  </label>
+  <label class="check" title="The TV never contacts the site: it sees only this computer (and its VPN, if you use one). Uses this computer's bandwidth while playing.">
+    <input id="relay" type="checkbox"> Private relay (hide the TV from the site)
+  </label>
+  <button id="cast" type="button" class="primary" disabled>Cast</button>
+  <button id="action" type="button" class="link" hidden></button>
+
+  <section id="controls" hidden>
+    <div class="row">
+      <button type="button" data-seek="-10" aria-label="Back 10 seconds">−10s</button>
+      <button type="button" id="playPause">Pause</button>
+      <button type="button" data-seek="30" aria-label="Forward 30 seconds">+30s</button>
+      <button type="button" id="stop">Stop</button>
+    </div>
+    <div class="row">
+      <label for="volume" class="inline">Vol</label>
+      <input id="volume" type="range" min="0" max="1" step="0.05">
+      <span id="time"></span>
+    </div>
+  </section>
+
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

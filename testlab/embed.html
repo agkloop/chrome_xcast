@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lab 1: embedded cross-origin player</title>
+  <link rel="stylesheet" href="lab.css">
+</head>
+<body>
+  <main>
+    <p><a href="./">← test lab</a></p>
+    <h1>Embedded cross-origin player</h1>
+    <p>The player below is another site's page in an iframe (the hls.js demo, playing Big Buck Bunny, CC&nbsp;BY). Press play inside it, then click XCast.</p>
+    <iframe src="https://hlsjs.video-dev.org/demo/" title="Embedded video player" allow="autoplay; fullscreen" allowfullscreen></iframe>
+    <h2>What should happen</h2>
+    <ol>
+      <li>The popup finds no video and offers <em>Scan embedded player from hlsjs.video-dev.org</em>.</li>
+      <li>After you allow it, the popup lists the <code>.m3u8</code> stream.</li>
+      <li>Cast plays it <strong>directly</strong> on the TV (status: “Playing on TV”).</li>
+    </ol>
+  </main>
+</body>
+</html>

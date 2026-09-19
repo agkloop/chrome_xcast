@@ -1,0 +1,29 @@
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #5f6368;
+  --line: #dadce0;
+  --accent: #1a73e8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f1f1f;
+    --fg: #e8e8e8;
+    --muted: #a0a0a0;
+    --line: #3a3a3a;
+    --accent: #8ab4f8;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, -apple-system, sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 1.6rem; margin: 0 0 12px; }
+h2 { font-size: 1.1rem; margin: 28px 0 8px; }
+a { color: var(--accent); }
+code { font-size: .92em; padding: 1px 4px; border: 1px solid var(--line); border-radius: 4px; }
+li { margin-bottom: 10px; }
+li p { margin: 4px 0 0; color: var(--muted); }
+video, iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 8px; background: #000; }
+iframe { aspect-ratio: auto; height: 560px; background: var(--bg); }
+#state, .note { color: var(--muted); font-size: .92rem; }

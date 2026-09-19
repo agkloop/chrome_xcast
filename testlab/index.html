@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XCast test lab</title>
+  <link rel="stylesheet" href="lab.css">
+</head>
+<body>
+  <main>
+    <h1>XCast test lab</h1>
+    <p>Three pages built like a typical embedded-player site, with a synthetic test video. Open one, press play, then click the XCast icon.</p>
+    <ol>
+      <li>
+        <a href="embed.html">Embedded cross-origin player</a>
+        <p>The player lives in an iframe from another HTTPS site and uses a <code>blob:</code> source. XCast cannot see into it until you allow <em>Scan embedded player from&nbsp;…</em> in the popup. Expect a <strong>direct</strong> cast: that stream is public.</p>
+      </li>
+      <li>
+        <a href="protected.html">Hotlink-protected stream</a>
+        <p>A <code>blob:</code>-source player with <code>disableremoteplayback</code>. The stream answers 403 unless the request carries this site's Referer, and sends no CORS headers, so the TV cannot fetch it. Expect XCast to ask about a device on your own network, then cast <strong>relayed</strong>.</p>
+      </li>
+      <li>
+        <a href="mp4.html">Signed, expiring MP4 link</a>
+        <p>A plain <code>&lt;video src="//host/file.mp4?s=…&amp;e=…"&gt;</code>: protocol-relative address, signature, expiry time, Referer check, Range requests. Expect a <strong>relayed</strong> cast, with seeking.</p>
+      </li>
+    </ol>
+    <p class="note">Watch the terminal running <code>server.py</code>: it prints who asked for each file and with which Referer.</p>
+  </main>
+</body>
+</html>
