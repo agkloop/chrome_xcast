@@ -16,6 +16,7 @@ let active = false;
 let idleTimer = 0;
 let lastMedia = null;
 let lastVolume = null;
+let lastMetrics = null; // this cast only, memory only
 const pending = new Map();
 
 function connect() {
@@ -36,6 +37,7 @@ function reset(reason) {
   port = null;
   active = false;
   lastMedia = null;
+  lastMetrics = null;
   for (const p of pending.values()) p.reject(Object.assign(new Error(reason), { code: 'HOST' }));
   pending.clear();
 }
@@ -96,10 +98,12 @@ function onHostMessage(m) {
   }
   if (m.type === 'device') cacheDevice(m.device);
   if (m.type === 'volume') lastVolume = m;
+  if (m.type === 'metrics') lastMetrics = m;
   if (m.type === 'disconnected') {
     // Helper gave up on the TV (it already retried and revoked the proxy).
     active = false;
     lastMedia = null;
+    lastMetrics = null;
     armIdle();
   }
   if (m.type === 'media') {
@@ -144,6 +148,7 @@ async function handle(msg) {
     case 'cast': {
       const r = await call({ type: 'cast', device: msg.device, media: msg.media }, 90_000);
       active = true;
+      lastMetrics = null; // a new cast starts its numbers from zero
       clearTimeout(idleTimer);
       return r;
     }
@@ -158,7 +163,7 @@ async function handle(msg) {
     case 'forget':
       return call({ type: 'forget', device: msg.device }, 5000);
     case 'state':
-      return { active, media: lastMedia, volume: lastVolume };
+      return { active, media: lastMedia, volume: lastVolume, metrics: lastMetrics };
     default:
       throw new Error('Unknown command');
   }

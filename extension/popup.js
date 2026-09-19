@@ -303,6 +303,7 @@ async function cast() {
   setAction(null);
   $('cast').disabled = true;
   setStatus('Casting…');
+  resetMetrics();
   try {
     const media = {
       url: s.url,
@@ -387,6 +388,60 @@ const fmt = (t) => {
   return h ? `${h}:${m.toString().padStart(2, '0')}:${s}` : `${m}:${s}`;
 };
 
+// ---- stats for the running cast (helper sends one snapshot a second) ----
+const fmtBytes = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)} GB` : n >= 1e6 ? `${Math.round(n / 1e6)} MB` : `${Math.round(n / 1e3)} KB`);
+const fmtSecs = (ms) => `${(ms / 1000).toFixed(1)} s`;
+
+// Pure: turns a snapshot into the texts on screen (kept separate so it can be tested).
+function describeMetrics(m) {
+  const relayed = m.mode === 'proxy';
+  const stallTime = m.stalls ? ` (${fmtSecs(m.stallMs)})` : '';
+  const hit = m.segments > 0 ? ` · read-ahead ${Math.round((100 * m.prefetchHits) / m.segments)}%` : '';
+  const count = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const trouble = m.retries || m.errors ? ` · ${count(m.retries, 'retry').replace('retrys', 'retries')}, ${count(m.errors, 'error')}` : '';
+  return {
+    speed: relayed ? `${m.mbps.toFixed(1)} Mbps` : '–',
+    stalls: `${m.stalls}${stallTime}`,
+    start: Number.isFinite(m.startMs) ? fmtSecs(m.startMs) : '–',
+    totals: relayed
+      ? `Relayed ${fmtBytes(m.bytes)}${hit}${trouble} · site answers in ${Math.round(m.ttfbMs)} ms`
+      : 'Direct: the TV fetches the video itself, so there is no relay traffic to measure.',
+  };
+}
+
+function drawSpark(values) {
+  const svg = $('spark');
+  const NS = 'http://www.w3.org/2000/svg';
+  const top = Math.max(1, ...values);
+  const pts = values.map((v, i) => `${((i / 59) * 300).toFixed(1)},${(38 - (v / top) * 34).toFixed(1)}`).join(' ');
+  const base = document.createElementNS(NS, 'line');
+  for (const [k, v] of Object.entries({ x1: 0, y1: 39, x2: 300, y2: 39 })) base.setAttribute(k, v);
+  const line = document.createElementNS(NS, 'polyline');
+  line.setAttribute('points', pts);
+  svg.replaceChildren(base, line);
+}
+
+function showMetrics(m) {
+  const num = (v) => typeof v === 'number' && Number.isFinite(v);
+  if (!m || !['mbps', 'bytes', 'stalls', 'stallMs', 'segments', 'prefetchHits', 'retries', 'errors', 'ttfbMs'].every((k) => num(m[k]))) return;
+  const t = describeMetrics(m);
+  $('mSpeed').textContent = t.speed;
+  $('mStalls').textContent = t.stalls;
+  $('mStart').textContent = t.start;
+  $('mTotals').textContent = t.totals;
+  state.spark = [...(state.spark || []), m.mode === 'proxy' ? m.mbps : 0].slice(-60);
+  $('spark').hidden = m.mode !== 'proxy';
+  if (m.mode === 'proxy') drawSpark(state.spark);
+}
+
+function resetMetrics() {
+  state.spark = [];
+  for (const id of ['mSpeed', 'mStart']) $(id).textContent = '–';
+  $('mStalls').textContent = '0';
+  $('mTotals').textContent = '';
+  $('spark').replaceChildren();
+}
+
 function showMedia(m) {
   state.media = m;
   $('controls').hidden = false;
@@ -408,6 +463,8 @@ chrome.runtime.onMessage.addListener((m, sender) => {
     showMedia(m);
   } else if (m.type === 'volume' && typeof m.level === 'number') {
     $('volume').value = m.level;
+  } else if (m.type === 'metrics') {
+    showMetrics(m);
   } else if (m.type === 'disconnected') {
     $('controls').hidden = true;
     if (typeof m.reason === 'string') setStatus(m.reason.slice(0, 200), 'err');
@@ -500,5 +557,6 @@ send({ cmd: 'state' })
   .then((r) => {
     if (r.active && r.media) showMedia(r.media);
     if (r.volume) $('volume').value = r.volume.level;
+    if (r.active && r.metrics) showMetrics(r.metrics);
   })
   .catch(() => {});
