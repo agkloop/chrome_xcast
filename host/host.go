@@ -59,6 +59,9 @@ type host struct {
 	msid   int64
 	prox   *proxy
 	closed bool
+
+	metrics     *castMetrics
+	metricsOnce sync.Once
 }
 
 func newHost(emit func(any)) *host { return &host{emit: emit, pins: defaultPinStore()} }
@@ -159,6 +162,7 @@ func (h *host) castMedia(ctx context.Context, d *deviceRef, m *mediaReq) (map[st
 
 	h.castMu.Lock()
 	defer h.castMu.Unlock()
+	castStarted := time.Now()
 	h.mu.Lock()
 	before := h.cc
 	h.mu.Unlock()
@@ -221,7 +225,15 @@ func (h *host) castMedia(ctx context.Context, d *deviceRef, m *mediaReq) (map[st
 	if plan.live {
 		at = 0
 	}
+	// Attached before the TV is told to load, i.e. before the relay session
+	// sees its first request: nothing is missed and nothing races.
+	cm := newCastMetrics("")
+	cm.started = castStarted // "started in" counts from the click
 	load := func() (int64, error) {
+		cm.mode = plan.mode
+		if plan.sess != nil {
+			plan.sess.m = cm
+		}
 		lctx, cancel := context.WithTimeout(ctx, loadTimeout)
 		defer cancel()
 		return cc.load(lctx, app, plan.loadMedia(m.Title), at)
@@ -243,9 +255,27 @@ func (h *host) castMedia(ctx context.Context, d *deviceRef, m *mediaReq) (map[st
 		up.client.CloseIdleConnections()
 	}
 	h.mu.Lock()
-	h.app, h.msid = app, msid
+	h.app, h.msid, h.metrics = app, msid, cm
 	h.mu.Unlock()
+	h.metricsOnce.Do(func() { go h.publishMetrics() })
 	return map[string]any{"mode": plan.mode, "contentType": plan.contentType, "live": plan.live}, nil
+}
+
+// publishMetrics sends the popup one snapshot a second while something plays.
+func (h *host) publishMetrics() {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for range t.C {
+		h.mu.Lock()
+		m, playing, closed := h.metrics, h.app != nil, h.closed
+		h.mu.Unlock()
+		if closed {
+			return
+		}
+		if m != nil && playing {
+			h.emit(m.snapshot())
+		}
+	}
 }
 
 func (h *host) proxyDo(fn func(*proxy)) {
@@ -442,11 +472,13 @@ func (h *host) onCastEvent(typ string, raw json.RawMessage) {
 			return
 		}
 		s := st.Status[0]
+		h.mu.Lock()
 		if s.MediaSessionID != 0 {
-			h.mu.Lock()
 			h.msid = s.MediaSessionID
-			h.mu.Unlock()
 		}
+		m := h.metrics
+		h.mu.Unlock()
+		m.noteState(s.PlayerState)
 		ev := map[string]any{"type": "media", "state": s.PlayerState, "currentTime": s.CurrentTime, "idleReason": s.IdleReason}
 		if s.Media != nil {
 			ev["duration"] = s.Media.Duration
@@ -476,6 +508,12 @@ func (h *host) control(ctx context.Context, action string, v float64) error {
 	}
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		return bad("invalid value")
+	}
+	if action == "seek" || action == "seekBy" {
+		h.mu.Lock()
+		m := h.metrics
+		h.mu.Unlock()
+		m.noteSeek()
 	}
 	var err error
 	switch action {

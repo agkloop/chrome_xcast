@@ -71,6 +71,7 @@ type session struct {
 	device   netip.Addr
 	lastUse  atomic.Int64
 	pf       *prefetcher
+	m        *castMetrics    // nil-safe; set by the host once the cast is planned
 	ctx      context.Context // cancelled at revocation: stops background fetches
 	cancel   context.CancelFunc
 }
@@ -423,7 +424,12 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request, s *session, targ
 			s.pf.kick(s, target)
 			copyHeaders(w.Header(), it.hdr)
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(it.body)
+			if s.m != nil {
+				s.m.requests.Add(1)
+				s.m.segments.Add(1)
+				s.m.prefetchHits.Add(1)
+			}
+			_, _ = countingWriter{w, s.m}.Write(it.body)
 			return
 		}
 	}
@@ -433,8 +439,18 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request, s *session, targ
 	defer cancel()
 	var resp *http.Response
 	var err error
+	if s.m != nil {
+		s.m.requests.Add(1)
+	}
 	for attempt := 0; ; attempt++ {
+		asked := time.Now()
 		resp, err = s.up.get(ctx, r.Method, target, hdr, true)
+		if err == nil {
+			s.m.noteTTFB(time.Since(asked))
+		}
+		if attempt == 1 && s.m != nil {
+			s.m.retries.Add(1)
+		}
 		transient := err != nil || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504
 		if !transient || attempt == 1 || ctx.Err() != nil {
 			break
@@ -446,6 +462,9 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request, s *session, targ
 		case <-time.After(300 * time.Millisecond):
 		case <-ctx.Done():
 		}
+	}
+	if s.m != nil && (err != nil || resp.StatusCode >= 400) {
+		s.m.errors.Add(1)
 	}
 	if err != nil {
 		debugf("upstream: %v", err)
@@ -485,8 +504,11 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request, s *session, targ
 	}
 	if plain && resp.StatusCode == http.StatusOK {
 		s.pf.kick(s, target)
+		if s.m != nil {
+			s.m.segments.Add(1)
+		}
 	}
-	_, _ = io.Copy(w, body)
+	_, _ = io.Copy(countingWriter{w, s.m}, body)
 }
 
 var passHeaders = [...]string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "Etag", "Cache-Control", "Expires"}
