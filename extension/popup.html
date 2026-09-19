@@ -46,6 +46,16 @@
       <input id="volume" type="range" min="0" max="1" step="0.05">
       <span id="time"></span>
     </div>
+    <details id="metrics" open>
+      <summary>Stats for this cast</summary>
+      <div class="tiles">
+        <div class="tile"><span class="tlabel">Speed</span><span class="tvalue" id="mSpeed">–</span></div>
+        <div class="tile"><span class="tlabel">Stalls</span><span class="tvalue" id="mStalls">0</span></div>
+        <div class="tile"><span class="tlabel">Started in</span><span class="tvalue" id="mStart">–</span></div>
+      </div>
+      <svg id="spark" viewBox="0 0 300 40" role="img" aria-label="Relay speed over the last minute"></svg>
+      <p id="mTotals"></p>
+    </details>
   </section>
 
   <script src="popup.js" type="module"></script>

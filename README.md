@@ -29,6 +29,8 @@ The first time you use it, macOS asks to let **xcast-host** find devices on your
 2. Click the XCast icon. It lists the video it found and the TVs on your network.
 3. Pick the TV and click **Cast**. Pause, seek, volume and stop are in the same popup.
 
+While something plays, the popup shows **stats for this cast**: relay speed with a one-minute graph, how often the TV ran out of video, how long the start took, data relayed, and how quickly the site answers. In direct mode the TV fetches the video itself, so only stalls and start time are known. The numbers live in memory for the current cast only and are never stored.
+
 Two switches in the popup:
 
 - **Automatic on all sites.** Off by default: XCast asks before looking inside a player embedded from another site. Turn it on (one Chrome prompt, once) and it never asks again. The price is that XCast then has access to every HTTPS page you visit.
