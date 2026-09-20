@@ -160,6 +160,9 @@ async function handle(msg) {
   switch (msg?.cmd) {
     case 'discover':
       return call({ type: 'discover', timeoutMs: 1500 }, 6000);
+    case 'warm':
+      // Best effort: the helper connects only to a TV it knows, and keeps quiet.
+      return call({ type: 'warm', device: msg.device }, 8000);
     case 'cast': {
       const r = await call({ type: 'cast', device: msg.device, media: msg.media }, 90_000);
       active = true;

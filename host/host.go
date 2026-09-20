@@ -132,6 +132,9 @@ func (h *host) dispatch(ctx context.Context, req request) (map[string]any, error
 			devs = devs[:maxDevices]
 		}
 		return map[string]any{"devices": devs}, nil
+	case "warm":
+		h.warm(ctx, req.Device)
+		return nil, nil
 	case "cast":
 		return h.castMedia(ctx, req.Device, req.Media)
 	case "control":
@@ -150,6 +153,41 @@ func (h *host) dispatch(ctx context.Context, req request) (map[string]any, error
 		return nil, nil
 	}
 	return nil, bad("unknown request type")
+}
+
+// warm opens the control connection to the TV picked in the popup, so that
+// Cast does not have to wait for the TLS handshake and the device check. It is
+// best effort and stays out of the way:
+//   - only a TV that was cast to before: merely opening the popup must not pin
+//     a new device's identity
+//   - never while a cast or reconnect runs, and never while something plays:
+//     the connection that exists (or is being won back) controls that stream.
+//     An idle one, left from warming another TV, is replaced
+//   - nothing is launched (that would wake the TV), and errors stay here: the
+//     cast reports them if they persist
+func (h *host) warm(ctx context.Context, d *deviceRef) {
+	if d == nil {
+		return
+	}
+	if addr, _, err := d.validate(); err == nil {
+		h.warmAddr(ctx, addr, d.pinKey())
+	}
+}
+
+func (h *host) warmAddr(ctx context.Context, addr, pinKey string) {
+	if !h.pins.known(pinKey) || !h.castMu.TryLock() {
+		return
+	}
+	defer h.castMu.Unlock()
+	h.mu.Lock()
+	skip := h.app != nil || (h.cc != nil && h.cc.addr == addr && h.cc.alive())
+	h.mu.Unlock()
+	if skip {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, _ = h.connect(ctx, addr, pinKey)
 }
 
 // castMedia overlaps the slow parts: starting the receiver app on the TV
@@ -415,15 +453,16 @@ func (h *host) onCastClosed(c *castConn) {
 	key, playing := h.ccKey, h.app != nil
 	h.cc = nil
 	h.mu.Unlock()
-	if playing {
-		for _, wait := range rejoinWaits {
-			time.Sleep(wait)
-			if done, ok := h.rejoin(c.addr, key); done {
-				if ok {
-					return
-				}
-				break
+	if !playing {
+		return // an idle (warmed) connection: nothing was controlled, nothing to report
+	}
+	for _, wait := range rejoinWaits {
+		time.Sleep(wait)
+		if done, ok := h.rejoin(c.addr, key); done {
+			if ok {
+				return
 			}
+			break
 		}
 	}
 	h.mu.Lock()

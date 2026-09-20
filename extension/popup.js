@@ -265,6 +265,14 @@ async function loadDevices() {
   if (lastDevice && state.devices.has(lastDevice)) $('device').value = lastDevice;
   updateCastButton();
   showTv();
+  warm();
+}
+
+// Has the helper connect to the picked TV now, so that Cast does not wait for
+// it. Only for a TV that was cast to before; the helper checks that again.
+function warm() {
+  const d = state.devices.get($('device').value);
+  if (d?.known) send({ cmd: 'warm', device: { id: d.id, host: d.host, port: d.port } }).catch(() => {});
 }
 
 async function discover() {
@@ -554,7 +562,10 @@ chrome.runtime.onMessage.addListener((m, sender) => {
   }
 });
 
-$('device').addEventListener('change', updateCastButton);
+$('device').addEventListener('change', () => {
+  updateCastButton();
+  warm();
+});
 $('relay').addEventListener('change', (e) => chrome.storage.local.set({ relay: e.target.checked }));
 chrome.storage.local.get('relay').then(({ relay }) => ($('relay').checked = !!relay));
 $('rescan').addEventListener('click', discover);
