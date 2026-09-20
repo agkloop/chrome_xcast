@@ -12,6 +12,7 @@
 <p align="center">
   <a href="#install-macos">Install</a> ·
   <a href="#use">Use</a> ·
+  <a href="#cast-a-file-from-the-command-line">Command line</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#security-and-privacy">Security</a> ·
   <a href="#when-it-doesnt-work">Troubleshooting</a> ·
@@ -89,6 +90,9 @@ Use Cast tab for Netflix and friends, for pages that are not a video, or where n
 - **Stats for this cast**: relay speed with a one-minute graph, stalls, start time, data relayed, read-ahead hit rate, retries, how quickly the site answers. In memory for the current cast only, never stored.
 - "Cast something else" without stopping what plays.
 - Light and dark, keyboard operable, screen-reader labelled.
+
+**Without the browser**
+- `xcast movie.mp4` casts a video file from this computer: it lists the TVs, you pick one, and the terminal becomes the remote. [More below](#cast-a-file-from-the-command-line).
 
 **Privacy**
 - **Private relay**: everything goes through your computer, so the site never sees your TV, and a VPN on your computer covers the TV's traffic too.
@@ -214,6 +218,38 @@ Behind the gear:
 
 - **Automatic on all sites.** Off by default: XCast asks before looking inside a player embedded from another site. Turn it on (one Chrome prompt, once) and it never asks again. The price is that XCast then has access to every HTTPS page you visit. Its code still only reads a page when you click the icon.
 - **Private relay.** Sends everything through your computer, so the site never sees your TV, and a VPN on your computer covers the TV's traffic too. It uses your computer's connection while the video plays, and the computer has to stay awake.
+
+## Cast a file from the command line
+
+The helper can also cast a video file from this computer, without the browser:
+
+```console
+$ xcast ~/Movies/holiday.mp4
+Looking for TVs…
+  1  Living Room TV             Chromecast             192.168.1.20    used before
+  2  Bedroom TV                 Nest Hub               192.168.1.21    new: its identity is remembered when you cast to it
+Cast to [1-2, Enter for 1, q to quit]: 1
+Connecting to Living Room TV…
+Playing holiday.mp4 on Living Room TV. Keep this running: the TV gets the video from here.
+  p          pause or play           f [secs]   forward (30)
+  s 1:23:45  jump to a position      b [secs]   back (10)
+  v 0-100    volume                  q          stop and quit
+Playing  0:00 / 1:34:00
+```
+
+| | |
+|---|---|
+| `xcast -d bedroom film.mp4` | Skip the question: part of the TV's name, or its IP address. |
+| `xcast -at 1:23:45 film.mp4` | Start at a position. |
+| `xcast -title "Film night" film.mp4` | What the TV shows as the title (default "XCast"). Every Cast controller on your network can read it. |
+
+`./install.sh` puts the command at `~/Library/Application Support/XCast/xcast` and tells you how to link it into your `PATH`.
+
+- It never picks a TV by itself, not even when it finds only one.
+- The command keeps running while the video plays, because the TV fetches the file from it. Ctrl-C or `q` stops the cast.
+- **Nothing is converted.** The TV plays `.mp4`, `.m4v`, `.mov`, `.webm`, `.mp3`, `.m4a` and `.aac`, and only with codecs it supports (H.264 video with AAC or MP3 audio is the safe choice; newer models play more). For an `.mkv` whose streams are already fine, remux without re-encoding: `ffmpeg -i in.mkv -c copy out.mp4`.
+- It runs in the same sandbox as always, which may additionally read the one file you named, and nothing else. The extension cannot ask the helper for a local file at all.
+- Started from a terminal, it is usually the terminal app that macOS asks about local network access, and that has to be allowed under Privacy & Security > Local Network.
 
 ## When it doesn't work
 

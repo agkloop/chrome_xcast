@@ -38,6 +38,11 @@ type mediaReq struct {
 	Title       string  `json:"title,omitempty"`
 	Mode        string  `json:"mode,omitempty"`
 	AllowLocal  bool    `json:"allowLocal,omitempty"`
+
+	// file is a video on this computer, served to the TV through the relay.
+	// Only the command line sets it: it has no JSON name, and the native
+	// messaging decoder refuses fields it does not know.
+	file string
 }
 
 func (m *mediaReq) validate() (*url.URL, error) {

@@ -96,6 +96,9 @@ func main() {
 		case "-cast":
 			cliCast(os.Args[2:])
 			return
+		case "-play":
+			cliPlay(os.Args[2:])
+			return
 		case "-check":
 			cliCheck(os.Args[2:])
 			return

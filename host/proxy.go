@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"path"
 	"regexp"
 	"strconv"
@@ -40,6 +41,9 @@ import (
 //   - only media comes back: pages and data (HTML, JSON, scripts, plain XML)
 //     and the bodies of upstream errors are never handed out, so a grant that
 //     covers more than the video cannot be used to read the site
+//   - a file from this computer is served only by the command line (xcast
+//     <file>), never for the extension: one file per session, the one the user
+//     named, under a token like any other
 //   - a session dies when its cast ends, when the TV connection is lost for
 //     good, or after sessionIdle without a request (a paused TV asks for
 //     nothing, so this has to outlast a long pause)
@@ -74,8 +78,10 @@ type session struct {
 	device   netip.Addr
 	lastUse  atomic.Int64
 	pf       *prefetcher
-	m        *castMetrics    // nil-safe; set by the host once the cast is planned
-	private  bool            // Private relay: a manifest that would send the TV to the site itself is refused
+	m        *castMetrics // nil-safe; set by the host once the cast is planned
+	private  bool         // Private relay: a manifest that would send the TV to the site itself is refused
+	file     string       // command line only: the one local file this session serves, instead of an upstream
+	fileType string
 	ctx      context.Context // cancelled at revocation: stops background fetches
 	cancel   context.CancelFunc
 }
@@ -320,6 +326,12 @@ func (p *proxy) entryURL(s *session, u *url.URL) string {
 	return p.fileURL(s, u.String())
 }
 
+// localURL grants the session's one local file. Its name and folder stay
+// unreadable on the LAN, like an upstream URL.
+func (p *proxy) localURL(s *session) string {
+	return p.base + "/" + s.id + "/f/" + s.seal('f', s.file) + "/" + hintName(s.file)
+}
+
 func splitPath(r *http.Request) []string {
 	return strings.SplitN(strings.TrimPrefix(r.URL.EscapedPath(), "/"), "/", 4)
 }
@@ -330,12 +342,15 @@ func (s *session) resolve(r *http.Request) (string, bool) {
 		return "", false
 	}
 	kind := parts[1]
-	if kind != "u" && kind != "p" {
+	if kind != "u" && kind != "p" && kind != "f" {
 		return "", false
 	}
 	target, ok := s.open(kind[0], parts[2])
 	if !ok {
 		return "", false
+	}
+	if kind == "f" {
+		return target, s.file != "" && target == s.file
 	}
 	if kind == "u" {
 		return target, true
@@ -410,7 +425,37 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.touch()
+	if s.file != "" {
+		if target == s.file {
+			p.serveFile(w, r, s)
+		} else {
+			http.NotFound(w, r) // a file session has no upstream to fetch from
+		}
+		return
+	}
 	p.forward(w, r, s, target)
+}
+
+// serveFile answers the TV from the session's local file, with Range support
+// (the TV seeks with it). The type was decided from the name when the cast was
+// planned; nothing is sniffed.
+func (p *proxy) serveFile(w http.ResponseWriter, r *http.Request, s *session) {
+	f, err := os.Open(s.file)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		http.NotFound(w, r)
+		return
+	}
+	if s.m != nil {
+		s.m.requests.Add(1)
+	}
+	w.Header().Set("Content-Type", s.fileType)
+	http.ServeContent(w, r, "", st.ModTime(), f)
 }
 
 func (p *proxy) forward(w http.ResponseWriter, r *http.Request, s *session, target string) {

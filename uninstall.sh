@@ -14,7 +14,7 @@ KEEP_PINS=yes
 [ "${1:-}" = "--all" ] && KEEP_PINS=no
 if [ -d "$DEST" ] && [ ! -L "$DEST" ]; then
   chmod -R u+w "$DEST" 2>/dev/null || true
-  rm -f "$DEST/xcast-host" "$DEST/xcast-host-sandboxed" "$DEST/xcast.sb" "$DEST/xcast-host.new"
+  rm -f "$DEST/xcast-host" "$DEST/xcast-host-sandboxed" "$DEST/xcast.sb" "$DEST/xcast-host.new" "$DEST/xcast" "$DEST/xcast-cli.sb"
   if [ "$KEEP_PINS" = no ]; then
     rm -rf "$DEST/data"
     rmdir "$DEST" 2>/dev/null || true

@@ -37,6 +37,7 @@ The relay rules below were tightened after an independent review; [SECURITY-ISSU
 |---|---|
 | Who can start it | Chrome launches it only for your extension ID (`allowed_origins`). The helper also compares the origin Chrome passes in with the one baked into the binary at install time. |
 | Sandbox | Deny by default. It can use the network, read the system trust store, `stat` its own install folder (macOS's certificate verifier requires that), and write only to its own `data/` folder. It cannot read or list your files or start other programs. |
+| Command line (`xcast <file>`) | The same helper in the same sandbox, which may additionally read the one file named on the command line (by its real path) and nothing else. That file is served to the TV like a relayed stream: only to the TV's address, under an encrypted token that shows neither its name nor its folder, with `GET`/`HEAD` only. The extension cannot ask for a local file: the request field has no JSON name and unknown fields are refused. |
 | Process limits | No core dumps, no crash tracebacks (they could contain URLs or cookies), 384 MB soft memory limit, at most 8 requests at once. |
 | Input | Messages are capped at 64 KB; a larger one is rejected without ending a running cast. Unknown fields are rejected and every field is validated. The TV must be a private LAN IPv4 address. |
 | Supply chain | Zero third-party dependencies. Supported, pinned Go toolchain. Built with `-trimpath` in a clean environment. Hardened-runtime signature. |
