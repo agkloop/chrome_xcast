@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request makes the older run moot.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    name: Helper
+    # The helper ships for macOS only. It happens to build for Linux as well,
+    # but its tests should run on the system it is installed on.
+    runs-on: macos-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: host
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: host/go.mod
+          # Standard library only, so there is no go.sum to key the cache on.
+          cache-dependency-path: host/go.mod
+      - run: go vet ./...
+      # Includes the seed corpus of every fuzz target in fuzz_test.go.
+      - run: go test -race ./...
+      - run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  extension:
+    name: Extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Every script parses
+        run: |
+          for f in extension/*.js; do
+            node --check "$f"
+          done
+      - name: The manifest is valid JSON
+        run: node -e 'JSON.parse(require("node:fs").readFileSync("extension/manifest.json", "utf8"))'
+      # A pattern, not the directory: node 22 takes a directory for a script.
+      - name: Tests
+        run: node --test "extension/test/**/*.test.mjs"

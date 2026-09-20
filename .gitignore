@@ -6,5 +6,6 @@ testlab/__pycache__/
 
 # build output
 host/xcast-host
+host/host
 *.test
 .DS_Store
