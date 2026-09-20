@@ -177,6 +177,10 @@ select { flex: 1; min-width: 0; height: 32px; }
 .icon-label { flex: none; display: inline-flex; color: var(--muted); }
 #volume { flex: 1; min-width: 0; height: 18px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 
+.tracks { display: flex; gap: 8px; margin-top: 12px; }
+.track { flex: 1; min-width: 0; }
+.track select { width: 100%; }
+
 #metrics { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
 #metrics summary { border-radius: 4px; color: var(--muted); font-size: 12px; cursor: pointer; }
 .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }

@@ -400,9 +400,9 @@ function setAction(text, run) {
   $('action').textContent = text || '';
 }
 
-async function control(action, value) {
+async function control(action, value, trackIds) {
   try {
-    await send({ cmd: 'control', action, value });
+    await send({ cmd: 'control', action, value, trackIds });
     if (action === 'stop') {
       castEnded();
       setStatus('Stopped');
@@ -515,6 +515,37 @@ function showPlayer() {
   bar.setAttribute('aria-valuetext', total ? `${fmt(now)} of ${fmt(total)}` : fmt(now));
   $('timeNow').textContent = fmt(now);
   $('timeTotal').textContent = total ? fmt(total) : '';
+  showTracks(m);
+}
+
+// Subtitle and audio tracks the TV found in the stream. Their names come from
+// the site's manifest: text only. The pickers are rebuilt only when the list
+// or the TV's choice changes, not on every tick: that would close an open one.
+function showTracks(m) {
+  const tracks = (Array.isArray(m.tracks) ? m.tracks : []).filter((t) => Number.isInteger(t?.id) && (t.type === 'TEXT' || t.type === 'AUDIO')).slice(0, 64);
+  const active = new Set(Array.isArray(m.activeTrackIds) ? m.activeTrackIds : []);
+  const key = JSON.stringify([tracks, [...active]]);
+  if (key === state.tracksKey) return;
+  state.tracksKey = key;
+  const fill = (select, row, list, off) => {
+    select.replaceChildren();
+    if (off) select.append(new Option('Off', ''));
+    list.forEach((t, i) => select.append(new Option([t.name, t.language].filter((s) => typeof s === 'string' && s).join(' · ') || `Track ${i + 1}`, String(t.id))));
+    select.value = String(list.find((t) => active.has(t.id))?.id ?? (off ? '' : list[0]?.id));
+    row.hidden = list.length < (off ? 1 : 2); // one audio track is no choice
+  };
+  fill($('subs'), $('subsRow'), tracks.filter((t) => t.type === 'TEXT'), true);
+  fill($('audio'), $('audioRow'), tracks.filter((t) => t.type === 'AUDIO'), false);
+  $('tracks').hidden = $('subsRow').hidden && $('audioRow').hidden;
+}
+
+// The TV wants the full list of tracks that are on: the audio one too.
+function pickTracks() {
+  const m = state.media || {};
+  const isAudio = (id) => Array.isArray(m.tracks) && m.tracks.some((t) => t.id === id && t.type === 'AUDIO');
+  // No audio picker (one track, or none listed): what the TV plays now stays.
+  const audio = $('audioRow').hidden ? (Array.isArray(m.activeTrackIds) ? m.activeTrackIds.filter(isAudio) : []) : [Number($('audio').value)];
+  control('tracks', 0, [...audio, ...($('subs').value ? [Number($('subs').value)] : [])]);
 }
 
 // Between the TV's reports the remote counts along by itself.
@@ -580,6 +611,8 @@ $('gear').addEventListener('click', () => {
   $('settings').hidden = !open;
   $('gear').setAttribute('aria-expanded', String(open));
 });
+$('subs').addEventListener('change', pickTracks);
+$('audio').addEventListener('change', pickTracks);
 $('castOther').addEventListener('click', () => setView('choose'));
 $('backToPlaying').addEventListener('click', () => setView('playing'));
 // Asks Chrome for site access. Must be called straight from a click: Chrome

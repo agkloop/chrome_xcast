@@ -518,6 +518,9 @@ func fakeReceiver(t *testing.T, signWith *rsa.PrivateKey, deviceCert []byte) (ad
 				reply(m, map[string]any{"type": "MEDIA_STATUS", "requestId": rid, "status": []any{map[string]any{"mediaSessionId": 7, "playerState": "BUFFERING"}}})
 			case "PAUSE":
 				reply(m, map[string]any{"type": "MEDIA_STATUS", "requestId": rid, "status": []any{map[string]any{"mediaSessionId": 7, "playerState": "PAUSED"}}})
+			case "EDIT_TRACKS_INFO":
+				loads <- p
+				reply(m, map[string]any{"type": "MEDIA_STATUS", "requestId": rid, "status": []any{map[string]any{"mediaSessionId": 7, "playerState": "PLAYING", "activeTrackIds": p["activeTrackIds"]}}})
 			}
 		}
 	}
@@ -730,4 +733,72 @@ func TestNativeFraming(t *testing.T) {
 		t.Fatalf("file URL accepted: %v", m)
 	}
 	pw.Close()
+}
+
+// Subtitle and audio tracks: the TV's list reaches the popup bounded, and the
+// popup's choice reaches the TV.
+func TestTracks(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events := make(chan map[string]any, 8)
+	h := newHost(func(v any) { b, _ := json.Marshal(v); var m map[string]any; json.Unmarshal(b, &m); events <- m })
+
+	long := strings.Repeat("é", 300)
+	status := map[string]any{"type": "MEDIA_STATUS", "status": []any{map[string]any{
+		"mediaSessionId": 7, "playerState": "PLAYING", "currentTime": 12, "activeTrackIds": []int{2},
+		"media": map[string]any{"duration": 600, "tracks": []any{
+			map[string]any{"trackId": 1, "type": "VIDEO"},
+			map[string]any{"trackId": 2, "type": "AUDIO", "name": "English", "language": "en"},
+			map[string]any{"trackId": 3, "type": "TEXT", "name": long, "language": "fr"},
+		}},
+	}}}
+	raw, _ := json.Marshal(status)
+	h.onCastEvent("MEDIA_STATUS", raw)
+	ev := <-events
+	tracks, _ := ev["tracks"].([]any)
+	if len(tracks) != 2 || ev["duration"] != float64(600) {
+		t.Fatalf("media event = %v", ev)
+	}
+	if name := tracks[1].(map[string]any)["name"].(string); len([]rune(name)) != 64 {
+		t.Fatalf("track name not bounded: %d characters", len([]rune(name)))
+	}
+	if ids, _ := ev["activeTrackIds"].([]any); len(ids) != 1 || ids[0] != float64(2) {
+		t.Fatalf("active tracks = %v", ev["activeTrackIds"])
+	}
+	// A later report without `media` says nothing about tracks: the popup keeps its list.
+	h.onCastEvent("MEDIA_STATUS", []byte(`{"status":[{"mediaSessionId":7,"playerState":"PAUSED"}]}`))
+	if ev = <-events; ev["tracks"] != nil || ev["activeTrackIds"] != nil {
+		t.Fatalf("report without media carries tracks: %v", ev)
+	}
+
+	if err := h.setTracks(ctx, []int64{3}); err == nil {
+		t.Fatal("tracks switched although nothing is casting")
+	}
+	devKey, devCert := newDeviceKey(t)
+	addr, edits, _ := fakeReceiver(t, devKey, devCert)
+	cc, err := dialCast(ctx, addr, func(string) error { return nil }, h.onCastEvent, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cc.Close()
+	app, err := cc.launch(ctx, defaultReceiver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	h.cc, h.app, h.msid = cc, app, 7
+	h.mu.Unlock()
+	for _, ids := range [][]int64{{2, 3}, nil} {
+		if err := h.setTracks(ctx, ids); err != nil {
+			t.Fatal(err)
+		}
+		got := <-edits
+		list, isList := got["activeTrackIds"].([]any)
+		if got["type"] != "EDIT_TRACKS_INFO" || got["mediaSessionId"] != float64(7) || !isList || len(list) != len(ids) {
+			t.Fatalf("sent to the TV for %v: %v", ids, got)
+		}
+	}
+	if err := h.setTracks(ctx, make([]int64, 9)); err == nil {
+		t.Fatal("nine tracks accepted")
+	}
 }
