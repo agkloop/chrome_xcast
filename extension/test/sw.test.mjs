@@ -56,7 +56,7 @@ async function casting() {
   const sw = load();
   const cast = sw.ask({ cmd: 'cast', device: {}, media: {} });
   await settle();
-  sw.host({ id: sw.posted[0].id, ok: true, mode: 'proxy' });
+  sw.host({ id: sw.posted.find((m) => m.type === 'cast').id, ok: true, mode: 'proxy' });
   assert.equal((await cast).ok, true);
   return sw;
 }
@@ -140,4 +140,27 @@ test('only our own extension pages are answered', async () => {
   assert.equal(sw.onMessage({ cmd: 'state' }, POPUP, (r) => (answer = r)), true);
   await settle();
   assert.equal(answer.ok, true);
+});
+
+// The extension and the helper are installed separately. On every new
+// connection sw.js asks the helper which protocol it speaks.
+test('a helper that is older than the extension is reported to the popup', async () => {
+  const outdated = (sw) => sw.sent.filter((m) => m.type === 'helper' && m.outdated === true).length;
+  const hello = (sw) => sw.posted.find((m) => m.type === 'hello');
+
+  let sw = await casting();
+  assert.ok(hello(sw), 'asked on connect');
+  sw.host({ id: hello(sw).id, ok: true, proto: 1 });
+  await settle();
+  assert.equal(outdated(sw), 0, 'a current helper is not news');
+
+  sw = await casting(); // a helper from before the question existed
+  sw.host({ id: hello(sw).id, ok: false, code: 'BAD_REQUEST', error: 'unknown request type' });
+  await settle();
+  assert.equal(outdated(sw), 1);
+
+  sw = await casting();
+  sw.host({ id: hello(sw).id, ok: true, proto: 0 });
+  await settle();
+  assert.equal(outdated(sw), 1, 'an answer below what the extension needs');
 });

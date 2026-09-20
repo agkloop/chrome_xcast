@@ -101,8 +101,15 @@ func (h *host) handle(req request) {
 	h.emit(res)
 }
 
+// protoVersion goes up whenever the extension starts to rely on something a
+// helper built before would not do. The two are installed separately (reload
+// the extension, run install.sh), so one can be left behind.
+const protoVersion = 1
+
 func (h *host) dispatch(ctx context.Context, req request) (map[string]any, error) {
 	switch req.Type {
+	case "hello":
+		return map[string]any{"proto": protoVersion}, nil
 	case "discover":
 		win := time.Duration(req.TimeoutMs) * time.Millisecond
 		if win < 300*time.Millisecond || win > 5*time.Second {
