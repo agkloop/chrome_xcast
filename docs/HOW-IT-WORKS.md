@@ -23,9 +23,7 @@
 - The extension was loaded into Chrome 153 (a separate throwaway profile, driven over the DevTools pipe). Verified: the manifest is accepted, the ID matches the one the installer was given, the toolbar popup renders without errors, the popup reaches the sandboxed helper through the service worker, and the helper accepts Chrome as the registered caller. The page scanner found the HLS stream on a legal demo page and ignored an unparsable `src` and a fake `?x=.mp4` URL.
 - **Blocked at TV discovery from Chrome** until the helper is allowed under System Settings > Privacy & Security > Local Network (entry "xcast-host"; see Known limits for why this repeats after a reinstall). The helper says so in the popup. Until it is allowed, casting from the extension cannot work, so the cast and playback controls have not been tested through Chrome.
 - Not tested in Chrome: clicking the toolbar icon by hand (automation cannot grant `activeTab`, so the popup's own scan of the page was not exercised), and every permission prompt.
-- **Open security issues remain, one of them High.** They are listed in [SECURITY-ISSUES.md](../SECURITY-ISSUES.md). Until they are fixed:
-  - do not allow XCast to use your cookies for DASH (`.mpd`) streams;
-  - use XCast only on a network you trust.
+- The five relay issues from the security review are closed in code, each with the test its entry in [SECURITY-ISSUES.md](../SECURITY-ISSUES.md) asked for. The fix changes how a relayed DASH manifest looks to the TV (single-file entry URL, an inserted `BaseURL`, rewritten templates), and that has only been run against test servers, not a real receiver. Lower-priority points remain open; use XCast only on a network you trust.
 
 
 ## The test lab

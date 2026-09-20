@@ -112,6 +112,18 @@ func typeFromHeader(h string) string {
 	return "video/mp4"
 }
 
+// mediaExt marks a request as media by its path. The user's cookies go only
+// to such paths: a playlist, or someone on the LAN holding a directory grant,
+// can make the relay ask for any path on the cookie host, and an account page
+// must not be fetched with the user's login.
+var mediaExt = map[string]bool{
+	".m3u8": true, ".mpd": true, ".mp4": true, ".m4s": true, ".m4v": true, ".m4a": true, ".mov": true, ".ts": true,
+	".aac": true, ".mp3": true, ".webm": true, ".vtt": true, ".key": true,
+}
+
+// credsKey carries get's creds flag to the redirect hook.
+type credsKey struct{}
+
 // upstream fetches from the origin the way the user's browser would.
 type upstream struct {
 	client     *http.Client
@@ -130,12 +142,56 @@ func newUpstream(pol *policy, u *url.URL, m *mediaReq) *upstream {
 	if r, err := url.Parse(m.Referer); err == nil && r.Host != "" {
 		up.origin = r.Scheme + "://" + r.Host
 	}
+	// net/http carries an explicit Referer and Origin along on redirects
+	// unchanged, and invents a Referer from the previous (possibly signed) URL
+	// when there was none. Both are set again for every new destination.
+	check := up.client.CheckRedirect
+	up.client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := check(req, via); err != nil {
+			return err
+		}
+		creds, _ := req.Context().Value(credsKey{}).(bool)
+		up.setOrigin(req, creds)
+		if !up.sendCookie(req.URL) {
+			req.Header.Del("Cookie")
+		}
+		return nil
+	}
 	return up
+}
+
+// setOrigin applies the browser's default rule (strict-origin-when-cross-
+// origin) for one destination: other hosts learn which site you are on, never
+// which page. Without creds (the receiver-like probe) no Referer is sent and
+// the caller's own Origin stays.
+func (up *upstream) setOrigin(req *http.Request, creds bool) {
+	req.Header.Del("Referer")
+	if !creds {
+		return
+	}
+	req.Header.Del("Origin")
+	dest := req.URL.Scheme + "://" + req.URL.Host
+	switch {
+	case up.origin == "":
+	case up.origin == dest:
+		req.Header.Set("Referer", up.referer)
+	case !(strings.HasPrefix(up.origin, "https:") && req.URL.Scheme == "http"):
+		req.Header.Set("Referer", up.origin+"/")
+	}
+	if up.origin != "" && up.origin != dest {
+		req.Header.Set("Origin", up.origin)
+	}
+}
+
+// sendCookie: only to the exact host the cookies were read for, only over
+// TLS, and only for a path that is clearly media.
+func (up *upstream) sendCookie(u *url.URL) bool {
+	return up.cookie != "" && u.Scheme == "https" && strings.EqualFold(u.Hostname(), up.cookieHost) && mediaExt[strings.ToLower(path.Ext(u.Path))]
 }
 
 // get never returns an error containing the full URL: signed URLs are secrets.
 func (up *upstream) get(ctx context.Context, method, raw string, hdr http.Header, creds bool) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, raw, nil)
+	req, err := http.NewRequestWithContext(context.WithValue(ctx, credsKey{}, creds), method, raw, nil)
 	if err != nil {
 		return nil, &codedErr{"UPSTREAM", "invalid upstream URL"}
 	}
@@ -143,24 +199,9 @@ func (up *upstream) get(ctx context.Context, method, raw string, hdr http.Header
 		req.Header[k] = v
 	}
 	req.Header.Set("User-Agent", up.ua)
-	if creds {
-		// Same rule as the browser's default (strict-origin-when-cross-origin):
-		// other hosts learn which site you are on, never which page.
-		switch {
-		case up.origin == "":
-		case up.origin == req.URL.Scheme+"://"+req.URL.Host:
-			req.Header.Set("Referer", up.referer)
-		case !(strings.HasPrefix(up.origin, "https:") && req.URL.Scheme == "http"):
-			req.Header.Set("Referer", up.origin+"/")
-		}
-		if up.origin != "" && up.origin != req.URL.Scheme+"://"+req.URL.Host {
-			req.Header.Set("Origin", up.origin)
-		}
-		// Cookies only go to the exact host they were read for, and only over
-		// TLS; CheckRedirect drops them on any redirect that leaves that host.
-		if up.cookie != "" && req.URL.Scheme == "https" && strings.EqualFold(req.URL.Hostname(), up.cookieHost) {
-			req.Header.Set("Cookie", up.cookie)
-		}
+	up.setOrigin(req, creds)
+	if creds && up.sendCookie(req.URL) {
+		req.Header.Set("Cookie", up.cookie)
 	}
 	resp, err := up.client.Do(req)
 	if err != nil {

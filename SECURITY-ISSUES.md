@@ -1,19 +1,16 @@
-# Open security issues
+# Security issues
 
-These came out of an independent review of the Go helper (`host/`). They are **not fixed**. Each entry says where the problem is, what it allows, what a fix has to achieve, and how to tell the fix worked. Line numbers drift, so entries name functions instead.
+These came out of an independent review of the Go helper (`host/`). Each entry says where the problem is, what it allows, what a fix has to achieve, and how to tell the fix worked. Line numbers drift, so entries name functions instead.
 
-Until issue 1 is closed:
+Issues 1 to 5 are **closed in code**: each has a **Fixed** note below naming the test that proves it. What that does not prove: the fixes change how a relayed DASH manifest looks to the TV, and relayed DASH has not been played on a real receiver since. The list at the end is still open. Use XCast only on a network you trust.
 
-- do not allow XCast to use your cookies for DASH (`.mpd`) streams;
-- use XCast only on a network you trust.
-
-| # | Severity | Summary |
-|---|---|---|
-| 1 | High | The relay trusts the TV's IP address alone, and DASH directory grants carry your cookies to any path on the host |
-| 2 | Medium | DASH relay URLs show the manifest's file name and signed query string |
-| 3 | Medium | Referer and Origin leak across redirects |
-| 4 | Low | Absolute URLs inside DASH manifests bypass Private relay |
-| 5 | Low | A playlist can trigger cookie-bearing requests to any path on the cookie host |
+| # | Severity | Status | Summary |
+|---|---|---|---|
+| 1 | High | Closed | The relay trusts the TV's IP address alone, and DASH directory grants carry your cookies to any path on the host |
+| 2 | Medium | Closed | DASH relay URLs show the manifest's file name and signed query string |
+| 3 | Medium | Closed | Referer and Origin leak across redirects |
+| 4 | Low | Closed | Absolute URLs inside DASH manifests bypass Private relay |
+| 5 | Low | Closed | A playlist can trigger cookie-bearing requests to any path on the cookie host |
 
 ---
 
@@ -42,6 +39,8 @@ This does not stop an attacker who takes over the TV's IP from pulling the *vide
 
 **Side effect to document.** HLS key or licence endpoints that have no media file extension and require cookies will stop working. That trade is intended.
 
+**Fixed.** `upstream.sendCookie` (`host/media.go`) attaches cookies only to a path with a media file extension (`mediaExt`), for the first request and after every redirect. `forward` (`host/proxy.go`) recognises manifests first, then refuses anything `isDocument` names (HTML, XHTML, JSON, JavaScript, plain XML, or a body that starts like an HTML page whatever its type) with 502, and answers an upstream error with the status alone, never its body. The prefetcher applies the same rule before it keeps a segment. `dirURL` refuses the top directory of the cookie host; `plan` says so in the popup, and the manifest rewriter refuses the same for a manifest reached through a redirect. Test: `TestRelayOnlyMedia`. The side effect also covers a playlist address without a media extension: it gets no cookies.
+
 ---
 
 ## 2. DASH relay URLs show the manifest's file name and query string
@@ -62,6 +61,8 @@ This does not stop an attacker who takes over the TV's IP from pulling the *vide
 
 **Done when** a test casts a DASH URL that has a recognisable file name and a query string, and neither appears anywhere in the URL the TV receives or in the rewritten manifest. Relative segment references in that manifest must still load through the relay.
 
+**Fixed.** `entryURL` is a single-file token for every kind of stream. `rewriteMPD` gives the manifest a `<BaseURL>` holding a directory grant on the manifest's own directory (or resolves and grants a top-level `BaseURL` the manifest already has), and `dirURL` ends with the token. Tests: `TestRelayOnlyMedia` (entry URL, manifest, a relative segment through the base), `TestDirGrantContainment`.
+
 ---
 
 ## 3. Referer and Origin leak across redirects
@@ -79,6 +80,8 @@ This does not stop an attacker who takes over the TV's IP from pulling the *vide
 **What a fix must achieve.** On every redirect, recompute both headers for the new destination with the same rule as the first request: nothing if none was intended, the full value only to the host it was meant for, the bare origin to any other host.
 
 **Done when** a test follows a redirect from the page's own host to a second host and the second host sees only the bare origin. A second test sends no Referer at all, follows a redirect, and the destination sees no Referer header.
+
+**Fixed.** `upstream.setOrigin` (`host/media.go`) holds the rule; `upstream.get` uses it for the first request and the `CheckRedirect` hook set in `newUpstream` uses it again for each redirect, removing the Referer that `net/http` carries along or invents. Test: `TestRedirectReferrer`.
 
 ---
 
@@ -98,6 +101,10 @@ This does not stop an attacker who takes over the TV's IP from pulling the *vide
 
 This touches the same function as issue 2, so fix them together.
 
+**Fixed.** `rewriteMPD` now reads the manifest with an XML tokenizer instead of a regular expression, so a URL cannot be hidden from it inside another attribute's value. Absolute `BaseURL`s, `media`, `initialization`, `index`, `bitstreamSwitching` and `sourceURL` attributes, and `UTCTiming` clock URLs become grants; `Location` and `PatchLocation` are dropped; a manifest that is not well-formed is refused. With Private relay on, a manifest with a remote element (`xlink:href`) is refused. Test: `TestRewriteMPD`.
+
+**Left over.** For an absolute segment template, what follows the first placeholder (the rest of the path, and the query string if the template has one) stays readable on the LAN, as the entry above accepts. A relative reference that climbs out of its directory (`../`) still does not resolve through a directory grant.
+
 ---
 
 ## 5. A playlist can trigger cookie-bearing requests to any path on the cookie host
@@ -112,9 +119,11 @@ This touches the same function as issue 2, so fix them together.
 
 **Done when** the test for issue 1 also covers a single-file token for a non-media path.
 
+**Fixed** with issue 1. `TestRelayOnlyMedia` asks for a page through a single-file token: no cookie goes out and no page comes back.
+
 ---
 
-## Lower priority, recorded so they are not lost
+## Open: lower priority, recorded so they are not lost
 
 - **Cast revocation list is not checked.** The device certificate chain is validated up to Google's Cast root, but a leaked device key that Google has revoked would still pass. `host/chain.go`.
 - **Discovery replies can be forged.** A UDP source address can be spoofed on a LAN, so a forged reply can make a "TV" entry point at another local machine. The effect is a TLS hello sent to that machine; the identity check then fails. `host/mdns.go`.

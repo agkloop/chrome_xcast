@@ -1,11 +1,11 @@
 # XCast security and privacy model
 
 What protects you, layer by layer, and what XCast keeps from the sites you cast from.
-Open issues are listed in [../SECURITY-ISSUES.md](../SECURITY-ISSUES.md).
+Closed and open issues are listed in [../SECURITY-ISSUES.md](../SECURITY-ISSUES.md).
 
 ## Security model
 
-Items marked **(open issue)** do not fully hold yet. See [SECURITY-ISSUES.md](../SECURITY-ISSUES.md).
+The relay rules below were tightened after an independent review; [SECURITY-ISSUES.md](../SECURITY-ISSUES.md) says what changed and what is still open.
 
 ### Extension
 
@@ -46,7 +46,7 @@ Items marked **(open issue)** do not fully hold yet. See [SECURITY-ISSUES.md](..
 | Area | Control |
 |---|---|
 | Listener | Binds only to the interface facing the TV, on a random port. Connections from any IP other than the TV are closed before HTTP parsing, at most 32 at a time. The `Host` header must match, which defeats DNS rebinding. **(open issue 1: source IP is the only gate; someone who takes over the TV's IP address passes it.)** |
-| URLs | Each upstream URL is an AES-256-GCM token under a random per-session key, with the grant type bound in. The proxy fetches only what the helper itself issued, so it is not an open proxy. **(open issue 2: DASH entry URLs still show the manifest's file name and query string.)** |
+| URLs | Each upstream URL is an AES-256-GCM token under a random per-session key, with the grant type bound in. The proxy fetches only what the helper itself issued, so it is not an open proxy. This holds for DASH too: the entry URL is a single-file token, and the directory grants its manifest needs end with the token. Only what follows the first placeholder of an absolute segment template stays readable, because the player fills it in. |
 | Upstream connections | Every dial, including redirects and DNS rebinding attempts, is checked. Refused always: loopback, link-local, CGNAT, metadata, any IPv6 address with a zone, all IPv6 outside global unicast, and the IPv4-embedding ranges (NAT64, 6to4, Teredo). A private LAN address is allowed only when the stream you chose is hosted there and you confirmed it in the popup, and then exactly one address. |
 | Manifests | At most 8 MB in, 20,000 URIs and 32 MB out. |
 | Sessions | Revoked immediately when you stop, when a newer cast starts playing, when a switch to another TV fails, or when the TV is lost for good. A timer removes idle ones; otherwise they last 12 hours, because a paused TV asks for nothing. Revocation also stops background prefetching. |
@@ -58,7 +58,7 @@ Items marked **(open issue)** do not fully hold yet. See [SECURITY-ISSUES.md](..
 |---|---|
 | Consent | Off by default. Asked only after the stream host answers 401 or 403. Consent is stored per pair of *site in the address bar* and *video host*. The Chrome permission alone never counts as consent. The prompt warns when the video host is not the site you are on. |
 | Which cookies | Only what Chrome itself would attach to such a request: all of them when the cookie's domain covers the page you are on, otherwise only `SameSite=None; Secure` ones. |
-| Where they go | Only over HTTPS, only to the exact host they were read for. Removed on any redirect that leaves that host. `https→http` redirects are refused. They live only in helper memory and never appear in logs or errors. **(open issues 1 and 5: a relay request for any path on that host still carries them.)** |
+| Where they go | Only over HTTPS, only to the exact host they were read for. Removed on any redirect that leaves that host. `https→http` redirects are refused. They live only in helper memory and never appear in logs or errors. Only to paths with a media file extension (playlists, manifests, segments, `.key`), also after a redirect: a playlist, or someone on the LAN holding a directory grant, cannot aim them at a page. With cookies in play, a DASH stream served from the top directory of its host is not relayed at all. |
 
 ## Privacy from the streaming site
 
@@ -67,11 +67,11 @@ The goal: a site learns nothing through XCast that it would not learn from you w
 | Concern | Behaviour |
 |---|---|
 | Detecting the extension | Nothing is injected until you click XCast. There are no web-accessible resources, and page scripts only read. The visible effects are pausing the local video after a cast starts, and the page reload you ask for when you choose to watch a site. |
-| Referer | Other hosts get only the site origin, never the page path or query. **(open issue 3: not yet true across redirects.)** |
+| Referer | Other hosts get only the site origin, never the page path or query. Decided again for every redirect, as a browser does: a redirect to another host never carries the page address, and no Referer is invented from a signed stream URL. |
 | Request headers | Only User-Agent (your browser's), Referer/Origin as above, Range and Accept. No extension identifier. The helper's TLS and HTTP fingerprint is Go's, not Chrome's, so a site that looks for it can tell the two apart. |
-| The TV | Direct mode lets the TV fetch the stream, so the site sees the TV's user agent, and the TV ignores any VPN on this computer. **Private relay** in the popup forces everything through this computer instead. **(open issue 4: absolute URLs inside DASH manifests still go direct.)** |
+| The TV | Direct mode lets the TV fetch the stream, so the site sees the TV's user agent, and the TV ignores any VPN on this computer. **Private relay** in the popup forces everything through this computer instead. In a relayed DASH manifest every URL goes through the relay (base URLs, segment URLs and templates, clock URLs); `Location` is dropped, and with Private relay on a manifest that pulls in remote elements (`xlink:href`) is refused. |
 | What the TV shows | The title sent to the TV is `XCast · <site hostname>`, or just `XCast` with Private relay on. Never the page title: a TV repeats the title, and in direct mode the stream URL, to every Cast controller on your network. |
-| Your LAN | Relay URLs are encrypted tokens, and file names are replaced by `media.<ext>`. **(open issue 2: not yet for DASH.)** The video bytes themselves travel as plain HTTP. |
+| Your LAN | Relay URLs are encrypted tokens, and file names are replaced by `media.<ext>`. The relay hands out media only: pages and data (HTML, JSON, scripts, plain XML) and the bodies of upstream errors are never returned. The video bytes themselves travel as plain HTTP. |
 | Data kept | Extension: discovered TVs, last TV, the relay switch, the sites you chose to watch, and your cookie-consent pairs (site and video host). Those last two lists are hostnames of sites you used XCast on. Helper: TV key pins. No record of individual videos, no analytics, no network calls other than to the stream host and the TV. |
 
 What XCast cannot hide: the stream host sees your IP address (as it does in Chrome). The helper uses the system DNS resolver, so Chrome's "secure DNS" does not cover its lookups. A browser-only VPN or proxy extension does not cover the helper or the TV; a system-wide VPN covers the helper, and with Private relay the TV's traffic too, apart from open issue 4.
