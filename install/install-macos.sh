@@ -100,6 +100,33 @@ EOF2
   echo "Registered: Google $channel"
 done
 
+# The command line (xcast <file>) runs the same helper in the same sandbox,
+# which on top of the usual rules may read the one file named to it.
+rm -f "$DEST/xcast-cli.sb"
+{ cat "$ROOT/install/xcast.sb"; echo; echo ';; xcast <file>: the file named on the command line, and nothing else.'; echo '(allow file-read* (literal (param "FILE")))'; } > "$DEST/xcast-cli.sb"
+chmod 400 "$DEST/xcast-cli.sb"
+CLI="$DEST/xcast"
+rm -f "$CLI"
+cat > "$CLI" <<WRAP
+#!/bin/sh
+# xcast [-d tv] [-at time] [-title text] <file>   (xcast with no arguments says more)
+export XCAST_DATA="$DEST/data"
+for last; do :; done
+FILE=/var/empty/none
+RESOLVED=
+case "\${last:-}" in
+  ""|-*) ;;
+  *) if [ -f "\$last" ]; then
+       # The sandbox matches real paths, not symlinks.
+       FILE=\$(/bin/realpath "\$last" 2>/dev/null) || FILE="\$(cd "\$(dirname "\$last")" && pwd -P)/\$(basename "\$last")"
+       RESOLVED=yes
+     fi ;;
+esac
+if [ -n "\$RESOLVED" ]; then set -- -resolved "\$FILE" "\$@"; fi
+exec /usr/bin/sandbox-exec -D BIN="$DEST/xcast-host" -D DIR="$DEST" -D DATA="$DEST/data" -D FILE="\$FILE" -f "$DEST/xcast-cli.sb" "$DEST/xcast-host" -play "\$@"
+WRAP
+chmod 500 "$CLI"
+
 echo "Installed:  $DEST/xcast-host"
 echo "SHA-256:    $(shasum -a 256 "$DEST/xcast-host" | cut -d' ' -f1)"
 echo "Allowed:    $ORIGIN"
@@ -111,3 +138,7 @@ echo "  2. Play a video, click the XCast icon, pick your TV, click Cast."
 echo "  3. The first time, macOS asks to let \"xcast-host\" find devices on your network: Allow."
 echo "     (System Settings > Privacy & Security > Local Network, if you missed it.)"
 echo "Check TVs from the terminal:  \"$WRAPPER\" -discover"
+echo
+echo "Cast a file from this computer:  \"$CLI\" movie.mp4"
+echo "To type just xcast, link it into a folder on your PATH, for example:"
+echo "  ln -sf \"$CLI\" /opt/homebrew/bin/xcast"

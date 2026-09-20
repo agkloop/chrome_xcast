@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -15,6 +16,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -1154,5 +1156,149 @@ func TestTracks(t *testing.T) {
 	}
 	if err := h.setTracks(ctx, make([]int64, 9)); err == nil {
 		t.Fatal("nine tracks accepted")
+	}
+}
+
+// xcast <file>: a video from this computer goes to the TV through the relay,
+// under a token like any other, and only the command line can ask for it.
+func TestCastLocalFile(t *testing.T) {
+	dir := t.TempDir()
+	body := bytes.Repeat([]byte("0123456789abcdef"), 4096) // 64 KB
+	file := filepath.Join(dir, "Holiday in Rome.mp4")
+	if err := os.WriteFile(file, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := newHost(func(any) {})
+	defer h.shutdown()
+	dev := netip.MustParseAddr("127.0.0.1")
+
+	plan, err := h.planFile(dev, file)
+	if err != nil || plan.mode != "proxy" || plan.contentType != "video/mp4" || plan.live {
+		t.Fatalf("plan = %+v, %v", plan, err)
+	}
+	for _, leak := range []string{"Holiday", "Rome", filepath.Base(dir)} {
+		if strings.Contains(plan.contentID, leak) {
+			t.Fatalf("the URL the TV gets shows %q: %s", leak, plan.contentID)
+		}
+	}
+	do := func(method, raw, rng string) (*http.Response, []byte) {
+		t.Helper()
+		req, _ := http.NewRequest(method, raw, nil)
+		if rng != "" {
+			req.Header.Set("Range", rng)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp, b
+	}
+	resp, got := do(http.MethodGet, plan.contentID, "")
+	if resp.StatusCode != 200 || !bytes.Equal(got, body) || resp.Header.Get("Content-Type") != "video/mp4" ||
+		resp.Header.Get("Accept-Ranges") != "bytes" || resp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("whole file: %d, %d bytes, %v", resp.StatusCode, len(got), resp.Header)
+	}
+	// The TV seeks with Range requests.
+	resp, got = do(http.MethodGet, plan.contentID, "bytes=16-31")
+	if resp.StatusCode != http.StatusPartialContent || string(got) != "0123456789abcdef" || resp.Header.Get("Content-Range") != fmt.Sprintf("bytes 16-31/%d", len(body)) {
+		t.Fatalf("range: %d %q %q", resp.StatusCode, got, resp.Header.Get("Content-Range"))
+	}
+	if resp, got = do(http.MethodHead, plan.contentID, ""); resp.StatusCode != 200 || len(got) != 0 || resp.ContentLength != int64(len(body)) {
+		t.Fatalf("HEAD: %d, length %d", resp.StatusCode, resp.ContentLength)
+	}
+
+	// The grant is for that one file. Another path under the same session, a
+	// file grant forged for a session that has no file, and an upstream grant
+	// on a file session all get nothing.
+	p := h.prox
+	other := filepath.Join(dir, "secret.mp4")
+	os.WriteFile(other, []byte("SECRET"), 0o600)
+	forged := p.base + "/" + plan.sess.id + "/f/" + plan.sess.seal('f', other) + "/media.mp4"
+	if resp, got = do(http.MethodGet, forged, ""); resp.StatusCode != 404 || bytes.Contains(got, []byte("SECRET")) {
+		t.Fatalf("second file served from a one-file session: %d %q", resp.StatusCode, got)
+	}
+	web, _ := p.newSession(nil, dev)
+	if resp, got = do(http.MethodGet, p.base+"/"+web.id+"/f/"+web.seal('f', other)+"/media.mp4", ""); resp.StatusCode != 404 || bytes.Contains(got, []byte("SECRET")) {
+		t.Fatalf("file grant honoured by a session without a file: %d %q", resp.StatusCode, got)
+	}
+	if resp, _ = do(http.MethodGet, p.fileURL(plan.sess, "https://example.com/x.mp4"), ""); resp.StatusCode != 404 {
+		t.Fatalf("file session fetched from upstream: %d", resp.StatusCode)
+	}
+
+	// What cannot be cast is refused before any TV is involved.
+	os.WriteFile(filepath.Join(dir, "film.mkv"), body, 0o600)
+	os.WriteFile(filepath.Join(dir, "list.m3u8"), []byte("#EXTM3U"), 0o600)
+	for _, bad := range []string{filepath.Join(dir, "film.mkv"), filepath.Join(dir, "list.m3u8"), filepath.Join(dir, "missing.mp4"), dir} {
+		if _, err := localFileType(bad); err == nil {
+			t.Errorf("%s accepted", filepath.Base(bad))
+		}
+	}
+
+	// The extension cannot name a file: the field has no JSON name, and the
+	// native messaging decoder refuses what it does not know.
+	for _, raw := range []string{`{"type":"cast","media":{"url":"https://a.example/v.mp4","file":"/etc/passwd"}}`, `{"type":"cast","media":{"url":"https://a.example/v.mp4","File":"/etc/passwd"}}`} {
+		var req request
+		dec := json.NewDecoder(strings.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err == nil && req.Media != nil && req.Media.file != "" {
+			t.Fatalf("a native message set the local file: %s", raw)
+		} else if err == nil {
+			t.Fatalf("unknown field accepted: %s", raw)
+		}
+	}
+}
+
+func TestPlayCommandLine(t *testing.T) {
+	for in, want := range map[string]float64{"90": 90, "1:30": 90, "1:02:03": 3723, " 0:05 ": 5, "12.5": 12.5} {
+		if got, err := parseClock(in); err != nil || got != want {
+			t.Errorf("parseClock(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "a", "1:2:3:4", "-5", "1:-2", "NaN", "Inf"} {
+		if got, err := parseClock(in); err == nil {
+			t.Errorf("parseClock(%q) = %v, want an error", in, got)
+		}
+	}
+	if clock(3723) != "1:02:03" || clock(65) != "1:05" {
+		t.Errorf("clock: %s %s", clock(3723), clock(65))
+	}
+
+	devs := []Device{
+		{ID: "a", Name: "Living Room TV", Model: "Chromecast", Host: "192.168.1.20", Port: 8009, Known: true},
+		{ID: "b", Name: "Bedroom TV", Model: "Nest Hub", Host: "192.168.1.21", Port: 8009},
+	}
+	pick := func(want, typed string) (string, string, error) {
+		var out strings.Builder
+		d, err := chooseDevice(devs, want, strings.NewReader(typed), &out)
+		return d.ID, out.String(), err
+	}
+	for _, c := range []struct{ want, typed, id string }{
+		{"", "2\n", "b"},
+		{"", "\n", "a"},        // Enter takes the first, which is a TV used before
+		{"", "9\nx\n2\n", "b"}, // asks again
+		{"bedroom", "", "b"},
+		{"192.168.1.20", "", "a"},
+	} {
+		if id, out, err := pick(c.want, c.typed); err != nil || id != c.id {
+			t.Errorf("chooseDevice(%q, %q) = %q, %v\n%s", c.want, c.typed, id, err, out)
+		}
+	}
+	// Nothing plays on a TV nobody chose.
+	for _, c := range []struct{ want, typed string }{{"", ""}, {"", "q\n"}, {"tv", ""}, {"kitchen", ""}, {"", "7\n8\n9\n"}} {
+		if id, _, err := pick(c.want, c.typed); err == nil {
+			t.Errorf("chooseDevice(%q, %q) picked %q by itself", c.want, c.typed, id)
+		}
+	}
+	if _, out, _ := pick("", "q\n"); !strings.Contains(out, "used before") || !strings.Contains(out, "new:") {
+		t.Errorf("the list does not tell known TVs from new ones:\n%s", out)
+	}
+	one := devs[:1]
+	if d, err := chooseDevice(one, "", strings.NewReader(""), io.Discard); err == nil {
+		t.Errorf("a single TV was picked without asking: %v", d.Name)
+	}
+	if _, err := chooseDevice(nil, "", strings.NewReader("1\n"), io.Discard); err == nil {
+		t.Error("picked from an empty list")
 	}
 }

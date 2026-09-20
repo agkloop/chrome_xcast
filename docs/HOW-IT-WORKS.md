@@ -28,6 +28,12 @@ The [README](../README.md#how-it-works) has the diagrams; this is the long form.
 - The five relay issues from the security review are closed in code, each with the test its entry in [SECURITY-ISSUES.md](../SECURITY-ISSUES.md) asked for. The fix changes how a relayed DASH manifest looks to the TV (single-file entry URL, an inserted `BaseURL`, rewritten templates), and that has only been run against test servers, not a real receiver. Lower-priority points remain open; use XCast only on a network you trust.
 
 
+## Casting a file from the command line
+
+`xcast movie.mp4` uses the same helper without the browser: it looks for TVs, lists them (those used before first) and asks which one, checks the TV's identity as always, and serves the file to the TV through the LAN proxy under a single-file token, with Range support for seeking. It never picks a TV by itself, not even when it finds only one. It keeps running while the video plays, and reads a few one-letter commands from standard input (`p`, `f`, `b`, `s 1:23:45`, `v 40`, `q`). Nothing is converted: the container has to be one a Cast receiver plays.
+
+Tested: the relay's file path against a test client (whole file, ranges, `HEAD`, forged and foreign tokens), the choice of TV, and the installed command's sandbox (it reads the named file, also through a symlink and with spaces in its path, and is refused any other). Not tested: playing a file on a real TV.
+
 ## The test lab
 
 `testlab/` is a local stand-in for a typical embedded-player site, with generated test video:

@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/netip"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -203,9 +204,11 @@ func (h *host) castMedia(ctx context.Context, d *deviceRef, m *mediaReq) (map[st
 	if err != nil {
 		return nil, err
 	}
-	u, err := m.validate()
-	if err != nil {
-		return nil, err
+	var u *url.URL
+	if m.file == "" {
+		if u, err = m.validate(); err != nil {
+			return nil, err
+		}
 	}
 
 	h.castMu.Lock()
@@ -232,6 +235,10 @@ func (h *host) castMedia(ctx context.Context, d *deviceRef, m *mediaReq) (map[st
 	}()
 	go func() {
 		defer wg.Done()
+		if m.file != "" {
+			plan, planErr = h.planFile(devIP, m.file)
+			return
+		}
 		pol := newPolicy(ctx, u.Hostname(), m.AllowLocal)
 		if pol.local && !m.AllowLocal {
 			planErr = &codedErr{"LOCAL_STREAM", "this video is served from your local network"}
@@ -388,6 +395,39 @@ func (h *host) plan(ctx context.Context, devIP netip.Addr, up *upstream, u *url.
 		}
 	}
 	return &mediaPlan{mode: "proxy", contentID: p.entryURL(s, u), mediaInfo: *r.info, sess: s}, nil
+}
+
+// planFile prepares a video file from this computer: always through the
+// relay, which is the only way the TV can reach it. Nothing is transcoded, so
+// only containers a Cast receiver plays are accepted.
+func (h *host) planFile(devIP netip.Addr, file string) (*mediaPlan, error) {
+	ct, err := localFileType(file)
+	if err != nil {
+		return nil, err
+	}
+	p, err := h.ensureProxy(devIP)
+	if err != nil {
+		return nil, err
+	}
+	s, err := p.newSession(nil, devIP)
+	if err != nil {
+		return nil, err
+	}
+	s.file, s.fileType = file, ct
+	return &mediaPlan{mode: "proxy", contentID: p.localURL(s), mediaInfo: mediaInfo{kind: "file", contentType: ct}, sess: s}, nil
+}
+
+// localFileType says what the TV will be told a local file is, going by its
+// name, or why it cannot be cast.
+func localFileType(file string) (string, error) {
+	ct := guessType(&url.URL{Path: file}, "")
+	if ct == "" || kindOf(ct) != "file" {
+		return "", &codedErr{"UNSUPPORTED", "the TV plays .mp4, .m4v, .mov, .webm, .mp3, .m4a and .aac files. Others have to be converted first, for example: ffmpeg -i in.mkv -c copy out.mp4"}
+	}
+	if st, err := os.Stat(file); err != nil || !st.Mode().IsRegular() {
+		return "", &codedErr{"BAD_REQUEST", "cannot read " + file}
+	}
+	return ct, nil
 }
 
 func (h *host) ensureProxy(dev netip.Addr) (*proxy, error) {
