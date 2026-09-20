@@ -546,6 +546,8 @@ chrome.runtime.onMessage.addListener((m, sender) => {
     $('volume').value = m.level;
   } else if (m.type === 'metrics') {
     showMetrics(m);
+  } else if (m.type === 'helper' && m.outdated === true) {
+    setStatus('The helper is older than this extension. Run install.sh again to update it.', 'err');
   } else if (m.type === 'disconnected') {
     castEnded();
     if (typeof m.reason === 'string') setStatus(m.reason.slice(0, 200), 'err');

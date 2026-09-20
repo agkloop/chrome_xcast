@@ -5,6 +5,9 @@
 const HOST = 'com.xcast.host';
 const IDLE_MS = 60_000;
 const FINAL_IDLE = new Set(['FINISHED', 'ERROR', 'CANCELLED', 'INTERRUPTED']);
+// What this extension needs from the helper (host.go, protoVersion). A helper
+// from before the check existed does not know the question: that counts as 0.
+const NEED_PROTO = 1;
 
 // Content scripts (watch.js runs inside web pages) get no access to storage.
 chrome.storage.local.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' });
@@ -29,6 +32,14 @@ function connect() {
     reset(reason);
     notify({ type: 'disconnected', reason });
   });
+  // The extension and the helper are updated separately: say so when the
+  // helper was left behind, instead of failing in odd ways later.
+  rawCall({ type: 'hello' }, 5000)
+    .then((r) => r.proto)
+    .catch((e) => (e.code === 'TIMEOUT' || e.code === 'HOST' ? NEED_PROTO : 0)) // no answer at all is a different problem
+    .then((proto) => {
+      if (!(proto >= NEED_PROTO)) notify({ type: 'helper', outdated: true });
+    });
   return port;
 }
 

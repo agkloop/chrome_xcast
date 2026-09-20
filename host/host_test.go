@@ -710,6 +710,9 @@ func TestNativeFraming(t *testing.T) {
 	pr, pw := net.Pipe()
 	out := make(chan map[string]any, 1)
 	h := newHost(func(v any) { b, _ := json.Marshal(v); var m map[string]any; json.Unmarshal(b, &m); out <- m })
+	if r, err := h.dispatch(context.Background(), request{Type: "hello"}); err != nil || r["proto"] != protoVersion {
+		t.Fatalf("hello = %v, %v", r, err)
+	}
 	go h.serve(pr)
 
 	send := func(b []byte) {
