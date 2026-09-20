@@ -4,6 +4,12 @@
   "version": "0.4.0",
   "description": "Cast web video to your Chromecast, even on sites without a Cast button.",
   "minimum_chrome_version": "116",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "permissions": [
     "activeTab",
     "scripting",
@@ -22,6 +28,10 @@
   },
   "action": {
     "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    },
     "default_title": "XCast"
   },
   "content_security_policy": {

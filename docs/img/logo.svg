@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="XCast">
+  <title>XCast</title>
+  <!-- An X whose fourth arm is a Cast signal, on a tile shaped like a screen. -->
+  <rect width="128" height="128" rx="28" fill="#1967d2"/>
+  <g transform="translate(2 -2)">
+    <g fill="none" stroke="#fff" stroke-linecap="round">
+      <path stroke-width="14" d="M35 35l58 58M64 64l29-29"/>
+      <path stroke-width="9" d="M30 82a16 16 0 0 1 16 16M30 68a30 30 0 0 1 30 30"/>
+    </g>
+    <circle cx="31" cy="97" r="6.5" fill="#fff"/>
+  </g>
+</svg>
