@@ -706,6 +706,89 @@ func TestCastLaunchLoadControl(t *testing.T) {
 	}
 }
 
+// The popup warms the connection to the picked TV before Cast is pressed.
+func TestWarm(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	events := make(chan any, 8)
+	h := newHost(func(v any) { events <- v })
+	h.pins = &pinStore{path: filepath.Join(t.TempDir(), "pins.json")}
+	current := func() *castConn {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.cc
+	}
+
+	tvKey, tvCert := newDeviceKey(t)
+	addr, _, kill := fakeReceiver(t, tvKey, tvCert)
+	// Never cast to: opening the popup must not connect, let alone pin it.
+	h.warmAddr(ctx, addr, "living-room")
+	if current() != nil || h.pins.known("living-room") {
+		t.Fatal("warmed a TV that was never cast to")
+	}
+	// Cast to before (its identity is pinned): the connection is made ahead...
+	cc, err := dialCast(ctx, addr, func(fp string) error { return h.pins.check("living-room", fp) }, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cc.Close()
+	h.warmAddr(ctx, addr, "living-room")
+	warmed := current()
+	if warmed == nil || !warmed.alive() {
+		t.Fatal("known TV not warmed")
+	}
+	// ...and the cast then uses it instead of dialling again.
+	h.castMu.Lock()
+	got, err := h.connect(ctx, addr, "living-room")
+	h.castMu.Unlock()
+	if err != nil || got != warmed {
+		t.Fatalf("cast did not reuse the warmed connection: %v", err)
+	}
+	// While something plays, its connection is left alone.
+	otherKey, otherCert := newDeviceKey(t)
+	other, _, _ := fakeReceiver(t, otherKey, otherCert)
+	cc, err = dialCast(ctx, other, func(fp string) error { return h.pins.check("bedroom", fp) }, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cc.Close()
+	h.mu.Lock()
+	h.app = &receiverApp{}
+	h.mu.Unlock()
+	h.warmAddr(ctx, other, "bedroom")
+	if current() != warmed {
+		t.Fatal("warming another TV took the connection of the one that plays")
+	}
+	// An idle one gives way when another TV is picked, and comes back after.
+	h.mu.Lock()
+	h.app = nil
+	h.mu.Unlock()
+	h.warmAddr(ctx, other, "bedroom")
+	if c := current(); c == nil || c == warmed || c.addr != other {
+		t.Fatal("picking another TV did not warm it")
+	}
+	h.warmAddr(ctx, addr, "living-room")
+	warmed = current()
+	if warmed == nil || warmed.addr != addr {
+		t.Fatal("picking the first TV again did not warm it")
+	}
+	// An idle connection that drops is nobody's business.
+	for i := 0; i < 3; i++ {
+		kill() // oldest first: the one that pinned the TV, the first warmed one, this one
+	}
+	for i := 0; i < 200 && current() != nil; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if current() != nil {
+		t.Fatal("dead connection still held")
+	}
+	select {
+	case ev := <-events:
+		t.Fatalf("idle connection loss reported to the popup: %v", ev)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestNativeFraming(t *testing.T) {
 	pr, pw := net.Pipe()
 	out := make(chan map[string]any, 1)

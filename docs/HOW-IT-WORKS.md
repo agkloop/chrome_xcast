@@ -2,7 +2,7 @@
 
 1. The popup reads the page's `<video>` elements and resource timing entries to find the real `.m3u8`, `.mpd` or `.mp4` URL. MSE players only expose `blob:` URLs, so the timing entries are what find their manifests. A URL counts as video by its path or, where Chrome exposes it, by its response type; never by its query string. Open shadow roots are searched for `<video>` too, and while the popup is open it keeps looking for about 30 seconds, since many players only fetch the stream once you press play.
 2. The helper does two things in parallel:
-   - connects to the TV, checks its identity, and starts the Default Media Receiver;
+   - connects to the TV, checks its identity, and starts the Default Media Receiver. For a TV you have cast to before, the connection and the identity check are already done when you press Cast: the popup asks for them as soon as it opens with that TV picked. Nothing is started on the TV at that point, so it does not wake up;
    - probes the stream, both the way the TV would fetch it and the way your browser would.
 3. If the TV can fetch the stream directly, it does, and your computer is not involved in playback. This is **direct** mode.
 4. If the stream fails the TV's checks (CORS, Referer, cookies), the helper relays it through a LAN proxy. This is **proxy** mode. The proxy streams bytes through without transcoding and rewrites HLS and DASH manifests so segment requests also go through it. It fetches the next HLS segment ahead of the TV (32 MB cap) and retries a failed upstream request once.
