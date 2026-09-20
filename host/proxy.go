@@ -11,7 +11,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"html"
+	"encoding/xml"
 	"io"
 	"log"
 	"mime"
@@ -37,6 +37,9 @@ import (
 //     or access token is behind a request
 //   - upstream dials are policy-checked (no pivot into your LAN)
 //   - GET/HEAD only, nothing is logged but hostnames
+//   - only media comes back: pages and data (HTML, JSON, scripts, plain XML)
+//     and the bodies of upstream errors are never handed out, so a grant that
+//     covers more than the video cannot be used to read the site
 //   - a session dies when its cast ends, when the TV connection is lost for
 //     good, or after sessionIdle without a request (a paused TV asks for
 //     nothing, so this has to outlast a long pause)
@@ -72,6 +75,7 @@ type session struct {
 	lastUse  atomic.Int64
 	pf       *prefetcher
 	m        *castMetrics    // nil-safe; set by the host once the cast is planned
+	private  bool            // Private relay: a manifest that would send the TV to the site itself is refused
 	ctx      context.Context // cancelled at revocation: stops background fetches
 	cancel   context.CancelFunc
 }
@@ -244,7 +248,6 @@ func (p *proxy) newSession(up *upstream, dev netip.Addr) (*session, error) {
 	}
 	s := &session{id: b64.EncodeToString(secret[:16]), aead: aead, nonceKey: secret[48:], up: up, device: dev, pf: newPrefetcher()}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
-	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.touch()
 	// The session that is playing right now stays valid until the new cast has
 	// actually started (see host.castMedia); only a runaway count evicts.
@@ -294,27 +297,26 @@ func (p *proxy) fileURL(s *session, target string) string {
 	return p.base + "/" + s.id + "/u/" + s.seal('u', target) + "/" + hintName(target)
 }
 
-// dirURL grants a directory, so relative references inside a DASH manifest
-// resolve naturally without rewriting every template. Only the file names
-// below that directory stay readable on the LAN.
-func (p *proxy) dirURL(s *session, u *url.URL) string {
+// dirURL grants the directory u lives in, for the relative references of a
+// DASH manifest. Nothing of the upstream URL stays readable: the base ends
+// with the token. With the user's cookies in play a grant on the top
+// directory, which is the whole site, is refused.
+func (p *proxy) dirURL(s *session, u *url.URL) (string, bool) {
 	esc := u.EscapedPath()
 	if esc == "" {
 		esc = "/"
 	}
-	i := strings.LastIndexByte(esc, '/')
-	prefix := u.Scheme + "://" + u.Host + esc[:i+1]
-	rest := esc[i+1:]
-	if u.RawQuery != "" {
-		rest += "?" + u.RawQuery
+	dir := esc[:strings.LastIndexByte(esc, '/')+1]
+	if dir == "/" && s.up != nil && s.up.cookie != "" && strings.EqualFold(u.Hostname(), s.up.cookieHost) {
+		return "", false
 	}
-	return p.base + "/" + s.id + "/p/" + s.seal('p', prefix) + "/" + rest
+	return p.base + "/" + s.id + "/p/" + s.seal('p', u.Scheme+"://"+u.Host+dir) + "/", true
 }
 
-func (p *proxy) entryURL(s *session, u *url.URL, kind string) string {
-	if kind == "dash" {
-		return p.dirURL(s, u)
-	}
+// entryURL is what the TV is told to play: always a single-file token, DASH
+// included (its relative references resolve through the base that rewriteMPD
+// puts into the manifest).
+func (p *proxy) entryURL(s *session, u *url.URL) string {
 	return p.fileURL(s, u.String())
 }
 
@@ -477,24 +479,41 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request, s *session, targ
 	defer watched.t.Stop()
 
 	body := bufio.NewReaderSize(watched, 4096)
+	if resp.StatusCode >= 400 {
+		// The status is all the TV needs. An error page can carry as much of
+		// the user's account as any other page.
+		w.WriteHeader(resp.StatusCode)
+		return
+	}
+	var head []byte
+	if r.Method == http.MethodGet {
+		head, _ = body.Peek(512)
+	}
+	mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if resp.StatusCode == http.StatusOK && r.Method == http.MethodGet {
 		final := resp.Request.URL
-		head, _ := body.Peek(512)
-		mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+		file := func(u *url.URL) string { return p.fileURL(s, u.String()) }
 		switch {
 		case strings.Contains(mt, "mpegurl") || bytes.HasPrefix(bytes.TrimLeft(head, "\ufeff \t\r\n"), []byte("#EXTM3U")):
 			serveRewritten(w, body, "application/vnd.apple.mpegurl", func(b []byte) []byte {
-				out, segments := rewriteHLS(b, final, func(u *url.URL) string { return p.fileURL(s, u.String()) })
+				out, segments := rewriteHLS(b, final, file)
 				s.pf.learn(segments)
 				return out
 			})
 			return
-		case strings.Contains(mt, "dash+xml") || strings.HasSuffix(strings.ToLower(final.Path), ".mpd"):
+		case strings.Contains(mt, "dash+xml") || strings.HasSuffix(strings.ToLower(final.Path), ".mpd") || bytes.Contains(head, []byte("<MPD")):
 			serveRewritten(w, body, ctDASH, func(b []byte) []byte {
-				return rewriteMPD(b, func(u *url.URL) string { return p.dirURL(s, u) })
+				return rewriteMPD(b, final, s.private, file, func(u *url.URL) (string, bool) { return p.dirURL(s, u) })
 			})
 			return
 		}
+	}
+	if isDocument(mt, head) {
+		if s.m != nil {
+			s.m.errors.Add(1)
+		}
+		http.Error(w, "not media", http.StatusBadGateway)
+		return
 	}
 
 	copyHeaders(w.Header(), resp.Header)
@@ -544,7 +563,7 @@ func serveRewritten(w http.ResponseWriter, body io.Reader, ct string, fn func([]
 	}
 	out := fn(b)
 	if out == nil {
-		http.Error(w, "manifest too large", http.StatusBadGateway)
+		http.Error(w, "manifest not relayable", http.StatusBadGateway)
 		return
 	}
 	h := w.Header()
@@ -605,19 +624,207 @@ func rewriteHLS(src []byte, base *url.URL, proxied func(*url.URL) string) (out [
 	return []byte(strings.Join(lines, "\n")), segments
 }
 
-var baseURLRe = regexp.MustCompile(`(<BaseURL[^>]*>)\s*([^<]+?)\s*(</BaseURL>)`)
+// isDocument reports a response that is a page or data rather than media.
+// Manifests are recognised before this is asked.
+func isDocument(mt string, head []byte) bool {
+	switch mt {
+	case "text/html", "application/xhtml+xml", "application/json", "text/xml", "application/xml",
+		"text/javascript", "application/javascript", "application/x-javascript", "text/ecmascript", "application/ecmascript":
+		return true
+	}
+	if strings.HasSuffix(mt, "+json") {
+		return true
+	}
+	h := bytes.ToLower(bytes.TrimLeft(head, "\ufeff \t\r\n"))
+	return bytes.HasPrefix(h, []byte("<!doctype html")) || bytes.HasPrefix(h, []byte("<html"))
+}
 
-// rewriteMPD redirects absolute BaseURLs through a directory grant. Relative
-// ones already resolve against the (proxied) manifest location.
-func rewriteMPD(src []byte, grant func(*url.URL) string) []byte {
-	return baseURLRe.ReplaceAllFunc(src, func(m []byte) []byte {
-		sub := baseURLRe.FindSubmatch(m)
-		u, err := url.Parse(html.UnescapeString(string(sub[2])))
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-			return m
+// Attributes of a DASH manifest that hold a URL. The first four are segment
+// templates ($Number$ and friends) on SegmentTemplate, plain URLs on SegmentURL.
+var mpdURLAttr = map[string]bool{"media": true, "initialization": true, "index": true, "bitstreamSwitching": true, "sourceURL": true}
+
+// rewriteMPD makes every URL in a DASH manifest go through the proxy, so the
+// TV never talks to the site:
+//   - the manifest gets a BaseURL (a directory grant on its own directory) for
+//     its relative references, which can no longer resolve against the entry
+//     URL: that is a single-file token. A BaseURL of its own at the top level
+//     is resolved and granted instead; BaseURLs further down stay relative to it
+//   - absolute BaseURLs, segment URLs and clock (UTCTiming) URLs become grants.
+//     A template is granted up to its first placeholder; what follows stays
+//     readable on the LAN, because the player fills it in
+//   - Location and PatchLocation are dropped: the player then reloads the
+//     manifest from the URL it already has, which is the relay
+//
+// base is the manifest's own (final) URL. It returns nil for a manifest it
+// cannot make safe: malformed XML, a directory grant that is refused, or, with
+// strict (Private relay), a remote element (xlink:href), which would be
+// fetched from the site and spliced in unseen.
+func rewriteMPD(src []byte, base *url.URL, strict bool, file func(*url.URL) string, dir func(*url.URL) (string, bool)) []byte {
+	var out bytes.Buffer
+	grants := 0
+	failed := false
+	grant := func(u *url.URL, asDir bool) string {
+		if grants++; grants > maxManifestURIs {
+			failed = true
+			return ""
 		}
-		return []byte(string(sub[1]) + html.EscapeString(grant(u)) + string(sub[3]))
-	})
+		if !asDir {
+			return file(u)
+		}
+		g, ok := dir(u)
+		failed = failed || !ok
+		return g
+	}
+	// absolute resolves ref if it names a host (http, https or "//host/..").
+	absolute := func(ref string) *url.URL {
+		r, err := url.Parse(strings.TrimSpace(ref))
+		if err != nil || (r.Scheme == "" && r.Host == "") {
+			return nil
+		}
+		return resolveHTTP(base, strings.TrimSpace(ref))
+	}
+	// A base that ends in a slash is a directory. One that names a media file
+	// is that file (on-demand profile). Anything else only ever serves to
+	// resolve references, which by RFC 3986 drops its last segment: that is
+	// the directory grant again.
+	baseGrant := func(u *url.URL) string {
+		asDir := !mediaExt[strings.ToLower(path.Ext(u.Path))]
+		return grant(u, asDir)
+	}
+
+	dec := xml.NewDecoder(bytes.NewReader(src))
+	// Bytes are copied through as they are; only ASCII is ever looked at. A
+	// declared encoding that is not valid UTF-8 still fails below.
+	dec.CharsetReader = func(_ string, r io.Reader) (io.Reader, error) { return r, nil }
+	var (
+		pos      int64    // where the current token starts in src
+		open     []string // element names, to check nesting: RawToken does not
+		dropping int      // depth of the Location being dropped, 0 if none
+		based    bool     // the top level has a BaseURL
+		baseText []byte   // text of the BaseURL being read
+		inBase   bool
+	)
+	for !failed {
+		tok, err := dec.RawToken()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil
+		}
+		raw := src[pos:dec.InputOffset()]
+		pos = dec.InputOffset()
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if inBase {
+				return nil
+			}
+			open = append(open, t.Name.Space+":"+t.Name.Local)
+			depth, name := len(open), t.Name.Local
+			if dropping > 0 {
+				continue
+			}
+			if name == "Location" || name == "PatchLocation" {
+				dropping = depth
+				continue
+			}
+			if depth == 2 && !based && name != "ProgramInformation" {
+				based = true
+				if name != "BaseURL" {
+					out.WriteString("<BaseURL>")
+					_ = xml.EscapeText(&out, []byte(grant(base, true)))
+					out.WriteString("</BaseURL>")
+				}
+			}
+			changed := false
+			for i, a := range t.Attr {
+				switch {
+				case a.Name.Local == "href" && a.Name.Space != "" && absolute(a.Value) != nil:
+					if strict {
+						return nil
+					}
+				case mpdURLAttr[a.Name.Local] || (name == "UTCTiming" && a.Name.Local == "value"):
+					v := strings.TrimSpace(a.Value)
+					rest := ""
+					if d := strings.IndexByte(v, '$'); d >= 0 {
+						cut := strings.LastIndexByte(v[:d], '/') + 1
+						v, rest = v[:cut], v[cut:]
+					}
+					if u := absolute(v); u != nil {
+						t.Attr[i].Value = grant(u, rest != "") + rest
+						changed = true
+					}
+				}
+			}
+			if changed {
+				raw = startTag(t, bytes.HasSuffix(raw, []byte("/>")))
+			}
+			inBase, baseText = name == "BaseURL", nil
+		case xml.EndElement:
+			n := len(open)
+			if n == 0 || open[n-1] != t.Name.Space+":"+t.Name.Local {
+				return nil
+			}
+			open = open[:n-1]
+			if dropping > 0 {
+				if n == dropping {
+					dropping = 0
+				}
+				continue
+			}
+			if inBase {
+				inBase = false
+				ref := string(baseText)
+				// Further down, a relative base resolves against the one above it.
+				if u := absolute(ref); u != nil {
+					ref = baseGrant(u)
+				} else if n == 2 && strings.TrimSpace(ref) != "" {
+					if u := resolveHTTP(base, strings.TrimSpace(ref)); u != nil {
+						ref = baseGrant(u)
+					}
+				}
+				_ = xml.EscapeText(&out, []byte(ref))
+			}
+		case xml.CharData:
+			if inBase {
+				baseText = append(baseText, t...)
+				continue
+			}
+		}
+		if dropping == 0 {
+			out.Write(raw)
+		}
+		if out.Len() > maxRewritten {
+			return nil
+		}
+	}
+	if failed || len(open) != 0 {
+		return nil
+	}
+	return out.Bytes()
+}
+
+// startTag writes a start tag out again after its attributes were changed.
+func startTag(t xml.StartElement, selfClosing bool) []byte {
+	var b bytes.Buffer
+	qname := func(n xml.Name) string {
+		if n.Space != "" {
+			return n.Space + ":" + n.Local
+		}
+		return n.Local
+	}
+	b.WriteString("<" + qname(t.Name))
+	for _, a := range t.Attr {
+		b.WriteString(" " + qname(a.Name) + `="`)
+		_ = xml.EscapeText(&b, []byte(a.Value))
+		b.WriteString(`"`)
+	}
+	if selfClosing {
+		b.WriteString("/>")
+	} else {
+		b.WriteString(">")
+	}
+	return b.Bytes()
 }
 
 // hintName gives the TV a file extension to go by and nothing else: the real

@@ -4,7 +4,7 @@ Cast web video to your Chromecast or Android TV from sites that have no Cast but
 
 XCast finds the real video stream on the page and tells the TV to play it. If the site blocks the TV from fetching the video, XCast relays it through your computer. Nothing is re-encoded.
 
-> **Early software.** It works in our tests, but it has [open security issues](SECURITY-ISSUES.md), one of them High. Until they are fixed, use it only on a network you trust, and do not let it use your cookies for DASH (`.mpd`) streams.
+> **Early software.** It works in our tests. The five issues an independent review found in the relay are [closed in code and covered by tests](SECURITY-ISSUES.md), but relayed DASH (`.mpd`) streams have not been played on a real TV since, and a few lower-priority points remain open. Use it on a network you trust.
 
 ## Install (macOS)
 
@@ -70,13 +70,14 @@ More detail:
 
 - [How it works, and what has been tested](docs/HOW-IT-WORKS.md)
 - [Security and privacy model](docs/SECURITY-MODEL.md)
-- [Open security issues](SECURITY-ISSUES.md)
+- [Security issues: closed and open](SECURITY-ISSUES.md)
 
 ## Known limits
 
 - **DRM streams won't work.** Netflix, Disney+, Prime and other Widevine-protected streams can't be cast this way. Use Chrome's built-in "Cast tab" for those.
 - **The proxy link between computer and TV is plain HTTP**, because the receiver does not trust local certificates.
 - **Same-user malware is out of scope.** Anything running as you can replace the helper binary or the native messaging manifest. The hardened runtime and the baked-in origin raise the bar; they do not remove this.
+- **Your cookies go only to media.** With cookies allowed, they are sent to playlists, manifests, segments and `.key` files, never to an address without a media file extension. A stream whose playlist or key address has no such extension and needs your login will not play.
 - **Partitioned (CHIPS) cookies are not read**, so some embedded players that rely on them will fail to authenticate.
 - **The helper needs macOS's Local Network permission, again after every reinstall.** Chrome hands responsibility for a native host to the host itself, so the permission belongs to `xcast-host`, not to Chrome. macOS identifies the binary by its code-signature hash, and an ad-hoc signed binary gets a new hash whenever it is rebuilt from changed source. After each install, allow "xcast-host" in System Settings > Privacy & Security > Local Network (macOS prompts on first use). Signing with a stable identity (Developer ID or a self-signed code-signing certificate) would make the permission survive rebuilds.
 - **macOS only** for now: the installer and the sandbox are macOS-specific.

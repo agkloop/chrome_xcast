@@ -13,6 +13,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"io"
 	"math/big"
@@ -22,8 +23,11 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -198,7 +202,7 @@ func TestProxyEndToEnd(t *testing.T) {
 	defer p.Close()
 	s, _ := p.newSession(upst, dev)
 	s.m = newCastMetrics("proxy")
-	entry := p.entryURL(s, u, "hls")
+	entry := p.entryURL(s, u)
 
 	get := func(raw string) (int, string, http.Header) {
 		t.Helper()
@@ -266,7 +270,7 @@ func TestProxyEndToEnd(t *testing.T) {
 			t.Fatalf("proxy URL leaks %q", leak)
 		}
 	}
-	if entry != p.entryURL(s, u, "hls") {
+	if entry != p.entryURL(s, u) {
 		t.Fatal("tokens must be stable for the same URL")
 	}
 	// A second cast must not cut off the first until it is committed.
@@ -278,7 +282,7 @@ func TestProxyEndToEnd(t *testing.T) {
 	if code, _, _ := get(segs[0]); code != 200 {
 		t.Fatalf("old session died with the failed cast: %d", code)
 	}
-	if code, _, _ := get(p.entryURL(s2, u, "hls")); code != http.StatusForbidden {
+	if code, _, _ := get(p.entryURL(s2, u)); code != http.StatusForbidden {
 		t.Fatalf("dropped session still served: %d", code)
 	}
 	s3, _ := p.newSession(upst, dev)
@@ -286,7 +290,7 @@ func TestProxyEndToEnd(t *testing.T) {
 	if code, _, _ := get(segs[0]); code != http.StatusForbidden {
 		t.Fatalf("superseded session still served: %d", code)
 	}
-	if code, _, _ := get(p.entryURL(s3, u, "hls")); code != 200 {
+	if code, _, _ := get(p.entryURL(s3, u)); code != 200 {
 		t.Fatalf("committed session: %d", code)
 	}
 
@@ -331,45 +335,60 @@ func TestRedirectAndCookieScope(t *testing.T) {
 	}))
 	defer other.Close()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ok", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, r.Header.Get("Cookie")) })
-	mux.HandleFunc("/other", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, other.URL+"/x", http.StatusFound) })
-	mux.HandleFunc("/down", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, plain.URL+"/x", http.StatusFound) })
-	mux.HandleFunc("/lan", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "https://10.255.255.1/x", http.StatusFound)
+	// Media paths throughout: a path that is not media gets no cookie to begin with.
+	echo := func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "cookie="+r.Header.Get("Cookie")) }
+	mux.HandleFunc("/ok.mp4", echo)
+	mux.HandleFunc("/account", echo)
+	mux.HandleFunc("/page.mp4", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/account", http.StatusFound) })
+	mux.HandleFunc("/other.mp4", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/x.mp4", http.StatusFound)
+	})
+	mux.HandleFunc("/down.mp4", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+"/x.mp4", http.StatusFound)
+	})
+	mux.HandleFunc("/lan.mp4", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://10.255.255.1/x.mp4", http.StatusFound)
 	})
 	main := httptest.NewTLSServer(mux)
 	defer main.Close()
 
-	u, _ := url.Parse(main.URL + "/ok")
+	u, _ := url.Parse(main.URL + "/ok.mp4")
 	up := newUpstream(loopbackPolicy(), u, &mediaReq{Cookie: "sid=secret"})
 	pool := x509.NewCertPool()
 	pool.AddCert(main.Certificate())
 	up.client.Transport.(*http.Transport).TLSClientConfig.RootCAs = pool
 	ctx := context.Background()
 
-	resp, err := up.get(ctx, http.MethodGet, main.URL+"/ok", nil, true)
+	for path, want := range map[string]string{
+		"/ok.mp4":   "cookie=sid=secret",
+		"/account":  "cookie=", // its own host, but not media
+		"/page.mp4": "cookie=", // media that redirects to a page
+	} {
+		resp, err := up.get(ctx, http.MethodGet, main.URL+path, nil, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if string(b) != want {
+			t.Fatalf("%s: upstream saw %q, want %q", path, b, want)
+		}
+	}
+	resp, err := up.get(ctx, http.MethodGet, main.URL+"/other.mp4", nil, true)
 	if err != nil {
-		t.Fatal(err)
-	}
-	b, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if string(b) != "sid=secret" {
-		t.Fatalf("cookie not sent to its own https host: %q", b)
-	}
-	if resp, err = up.get(ctx, http.MethodGet, main.URL+"/other", nil, true); err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
 	if otherSawCookie.Load() != 0 {
 		t.Fatal("cookie followed a redirect to another host")
 	}
-	if _, err = up.get(ctx, http.MethodGet, main.URL+"/down", nil, true); err == nil || plainHits.Load() != 0 {
+	if _, err = up.get(ctx, http.MethodGet, main.URL+"/down.mp4", nil, true); err == nil || plainHits.Load() != 0 {
 		t.Fatalf("https to http downgrade was followed (err=%v hits=%d)", err, plainHits.Load())
 	}
-	if _, err = up.get(ctx, http.MethodGet, main.URL+"/lan", nil, true); err == nil {
+	if _, err = up.get(ctx, http.MethodGet, main.URL+"/lan.mp4", nil, true); err == nil {
 		t.Fatal("redirect into a private address was followed")
 	}
-	if resp, err = up.get(ctx, http.MethodGet, plain.URL+"/x", nil, true); err != nil {
+	if resp, err = up.get(ctx, http.MethodGet, plain.URL+"/x.mp4", nil, true); err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close() // the handler itself asserts that no cookie arrived
@@ -385,8 +404,10 @@ func TestDirGrantContainment(t *testing.T) {
 		t.Fatal(err)
 	}
 	base, _ := url.Parse("https://cdn.example/a/b/manifest.mpd?token=1")
-	entry := p.dirURL(s, base)
-	prefix := entry[:strings.LastIndex(entry, "/")+1]
+	prefix, ok := p.dirURL(s, base)
+	if !ok || !strings.HasSuffix(prefix, "/") || strings.Contains(prefix, "manifest") || strings.Contains(prefix, "token=1") {
+		t.Fatalf("directory grant must end with the token and show nothing of the URL: %q", prefix)
+	}
 	for rest, want := range map[string]string{
 		"manifest.mpd?token=1":  "https://cdn.example/a/b/manifest.mpd?token=1",
 		"video/seg-1.m4s":       "https://cdn.example/a/b/video/seg-1.m4s",
@@ -409,10 +430,257 @@ func TestDirGrantContainment(t *testing.T) {
 }
 
 func TestRewriteMPD(t *testing.T) {
-	src := []byte(`<MPD><BaseURL>https://cdn.example/a/b/</BaseURL><Period><BaseURL>video/</BaseURL></Period></MPD>`)
-	out := string(rewriteMPD(src, func(u *url.URL) string { return "http://proxy/" + u.Host + u.Path }))
-	if !strings.Contains(out, "<BaseURL>http://proxy/cdn.example/a/b/</BaseURL>") || !strings.Contains(out, "<BaseURL>video/</BaseURL>") {
-		t.Fatalf("rewrite = %s", out)
+	base, _ := url.Parse("https://site.example/vod/42/manifest.mpd?sig=SECRET")
+	file := func(u *url.URL) string { return "http://proxy/u/" + b64.EncodeToString([]byte(u.String())) }
+	dir := func(u *url.URL) (string, bool) {
+		d := u.Scheme + "://" + u.Host + u.Path[:strings.LastIndex(u.Path, "/")+1]
+		return "http://proxy/p/" + b64.EncodeToString([]byte(d)) + "/", d != "https://site.example/"
+	}
+	granted := func(out, kind, target string) bool {
+		return strings.Contains(out, "http://proxy/"+kind+"/"+b64.EncodeToString([]byte(target)))
+	}
+
+	// Every place a DASH manifest can name another host.
+	src := `<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" xmlns:xlink="http://www.w3.org/1999/xlink" type="dynamic">
+  <ProgramInformation><Title>t &amp; t</Title></ProgramInformation>
+  <Location>https://site.example/vod/42/manifest.mpd?sig=NEXT</Location>
+  <UTCTiming schemeIdUri="urn:mpeg:dash:utc:http-xsdate:2014" value="https://time.example/now?iso"/>
+  <Period>
+    <BaseURL>https://cdn.example/a/b/</BaseURL>
+    <AdaptationSet>
+      <BaseURL>video/</BaseURL>
+      <SegmentTemplate media="https://cdn2.example/x/$RepresentationID$/seg-$Number$.m4s?tok=T" initialization='//cdn2.example/x/init.mp4'/>
+      <Representation id="on-demand"><BaseURL>https://cdn.example/a/b/whole.mp4?sig=S</BaseURL>
+        <SegmentBase><Initialization sourceURL="https://cdn.example/a/b/init-2.mp4"/></SegmentBase>
+      </Representation>
+      <SegmentList><SegmentURL media="https://cdn.example/a/b/s1.m4s" fake=" media='https://decoy.example/x' "/></SegmentList>
+    </AdaptationSet>
+  </Period>
+</MPD>`
+	out := string(rewriteMPD([]byte(src), base, true, file, dir))
+	for _, host := range []string{"site.example", "cdn.example", "cdn2.example", "time.example", "SECRET", "NEXT", "sig=S", "manifest.mpd"} {
+		if strings.Contains(out, host) {
+			t.Errorf("rewritten manifest still names %q:\n%s", host, out)
+		}
+	}
+	for _, want := range [][2]string{
+		{"p", "https://site.example/vod/42/"}, // its own directory, for relative references
+		{"p", "https://cdn.example/a/b/"},
+		{"p", "https://cdn2.example/x/"}, // a template: granted up to the first placeholder
+		{"u", "https://cdn2.example/x/init.mp4"},
+		{"u", "https://cdn.example/a/b/whole.mp4?sig=S"},
+		{"u", "https://cdn.example/a/b/init-2.mp4"},
+		{"u", "https://cdn.example/a/b/s1.m4s"},
+		{"u", "https://time.example/now?iso"},
+	} {
+		if !granted(out, want[0], want[1]) {
+			t.Errorf("no %s grant for %s in:\n%s", want[0], want[1], out)
+		}
+	}
+	// decoy.example sits inside another attribute's value, dressed up as a
+	// media attribute: it must neither be taken for one nor hide the real one.
+	for _, keep := range []string{"/$RepresentationID$/seg-$Number$.m4s?tok=T", "<BaseURL>video/</BaseURL>", "t &amp; t", `xmlns:xlink="http://www.w3.org/1999/xlink"`, "decoy.example"} {
+		if !strings.Contains(out, keep) {
+			t.Errorf("lost %q in:\n%s", keep, out)
+		}
+	}
+	if strings.Contains(out, "<Location") {
+		t.Errorf("Location kept:\n%s", out)
+	}
+	if err := xml.Unmarshal([]byte(out), new(struct{})); err != nil {
+		t.Errorf("rewritten manifest is not well-formed: %v", err)
+	}
+
+	// A top-level base of the manifest's own is resolved against its URL and
+	// takes the place of the inserted one.
+	out = string(rewriteMPD([]byte(`<MPD><BaseURL>media/</BaseURL><Period/></MPD>`), base, false, file, dir))
+	if !granted(out, "p", "https://site.example/vod/42/media/") || strings.Count(out, "<BaseURL>") != 1 {
+		t.Errorf("relative top-level base: %s", out)
+	}
+	// An empty base says nothing; a declared encoding is no reason to refuse.
+	out = string(rewriteMPD([]byte(`<?xml version="1.0" encoding="ISO-8859-1"?><MPD><BaseURL/><Period/></MPD>`), base, false, file, dir))
+	if !strings.Contains(out, "<MPD><BaseURL/><Period/></MPD>") {
+		t.Errorf("empty top-level base: %q", out)
+	}
+	// A remote element would be fetched from the site and spliced in unseen.
+	remote := []byte(`<MPD xmlns:xlink="http://www.w3.org/1999/xlink"><Period xlink:href="https://site.example/period.xml"/></MPD>`)
+	if rewriteMPD(remote, base, true, file, dir) != nil {
+		t.Error("remote element accepted under Private relay")
+	}
+	if rewriteMPD(remote, base, false, file, dir) == nil {
+		t.Error("remote element refused without Private relay")
+	}
+	// Refused: a grant the proxy will not give, and XML that is not XML.
+	top, _ := url.Parse("https://site.example/manifest.mpd")
+	for name, bad := range map[string][]byte{
+		"top directory": []byte(`<MPD><Period/></MPD>`),
+		"bad nesting":   []byte(`<MPD><Period></MPD></Period>`),
+		"unclosed":      []byte(`<MPD><Period>`),
+		"markup in URL": []byte(`<MPD><BaseURL>a<b/></BaseURL></MPD>`),
+	} {
+		b := base
+		if name == "top directory" {
+			b = top
+		}
+		if got := rewriteMPD(bad, b, false, file, dir); got != nil {
+			t.Errorf("%s: accepted: %s", name, got)
+		}
+	}
+}
+
+// Issues 1 and 5 of SECURITY-ISSUES.md: whoever holds a grant (a hostile
+// playlist, or a device that took the TV's address) must get neither the
+// user's cookies onto a page, nor a page back.
+func TestRelayOnlyMedia(t *testing.T) {
+	var mu sync.Mutex
+	cookies := map[string]string{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		cookies[r.URL.Path] = r.Header.Get("Cookie")
+		mu.Unlock()
+		switch path.Ext(r.URL.Path) {
+		case ".mpd":
+			w.Header().Set("Content-Type", ctDASH)
+			io.WriteString(w, `<MPD><Period><AdaptationSet><SegmentTemplate media="seg-$Number$.m4s"/></AdaptationSet></Period></MPD>`)
+		case ".m4s":
+			w.Header().Set("Content-Type", "video/iso.segment")
+			io.WriteString(w, "SEGMENT")
+		case ".json":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"email":"me@example.com"}`)
+		case ".ts": // a page that answers under a media-looking name
+			w.Header().Set("Content-Type", "application/octet-stream")
+			io.WriteString(w, "\n <!DOCTYPE HTML><html>account</html>")
+		case ".mp4":
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusForbidden)
+			io.WriteString(w, "<html>please log in, me@example.com</html>")
+		default:
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			io.WriteString(w, "<html>account</html>")
+		}
+	})
+	site := httptest.NewTLSServer(mux)
+	defer site.Close()
+	u, _ := url.Parse(site.URL + "/vod/42/manifest.mpd?sig=SECRET")
+	up := newUpstream(loopbackPolicy(), u, &mediaReq{Cookie: "sid=secret"})
+	pool := x509.NewCertPool()
+	pool.AddCert(site.Certificate())
+	up.client.Transport.(*http.Transport).TLSClientConfig.RootCAs = pool
+
+	dev := netip.MustParseAddr("127.0.0.1")
+	p, err := startProxy(dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	s, _ := p.newSession(up, dev)
+	get := func(raw string) (int, string) {
+		t.Helper()
+		resp, err := http.Get(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	sent := func(path string) string {
+		mu.Lock()
+		defer mu.Unlock()
+		return cookies[path]
+	}
+
+	// Issue 2: nothing of the DASH URL is readable, and it still plays.
+	entry := p.entryURL(s, u)
+	code, manifest := get(entry)
+	if code != 200 || strings.Contains(entry+manifest, "manifest") || strings.Contains(entry+manifest, "SECRET") || strings.Contains(entry+manifest, "vod") {
+		t.Fatalf("DASH entry: %d %q %q", code, entry, manifest)
+	}
+	if sent("/vod/42/manifest.mpd") != "sid=secret" {
+		t.Fatal("the manifest itself is media: it needs the cookie")
+	}
+	m := regexp.MustCompile(`<BaseURL>([^<]+)</BaseURL>`).FindStringSubmatch(manifest)
+	if m == nil {
+		t.Fatalf("no base for relative references in %q", manifest)
+	}
+	dirGrant := m[1]
+	if code, body := get(dirGrant + "seg-1.m4s"); code != 200 || body != "SEGMENT" || sent("/vod/42/seg-1.m4s") != "sid=secret" {
+		t.Fatalf("relative segment through the base: %d %q cookie=%q", code, body, sent("/vod/42/seg-1.m4s"))
+	}
+
+	// Issue 1: the same grant, asked for something that is not the video.
+	for _, rest := range []string{"account", "api/me.json", "page.ts", "clip.mp4"} {
+		code, body := get(dirGrant + rest)
+		if code == 200 || strings.Contains(body, "account") || strings.Contains(body, "example.com") {
+			t.Errorf("directory grant returned a document for %q: %d %q", rest, code, body)
+		}
+	}
+	if c := sent("/vod/42/account"); c != "" {
+		t.Errorf("cookie %q sent to a path that is not media (directory grant)", c)
+	}
+	if c := sent("/vod/42/api/me.json"); c != "" {
+		t.Errorf("cookie %q sent to a JSON endpoint", c)
+	}
+	// Issue 5: a single-file token, as a hostile playlist would earn one.
+	if code, body := get(p.fileURL(s, site.URL+"/settings")); code == 200 || body == "<html>account</html>" || sent("/settings") != "" {
+		t.Errorf("file grant for a page: %d %q cookie=%q", code, body, sent("/settings"))
+	}
+
+	// With cookies, a stream at the top of the host is not relayed at all.
+	top, _ := url.Parse(site.URL + "/manifest.mpd")
+	if _, ok := p.dirURL(s, top); ok {
+		t.Error("directory grant on the whole cookie host")
+	}
+	if code, _ := get(p.entryURL(s, top)); code != http.StatusBadGateway {
+		t.Errorf("top-level DASH manifest relayed with cookies: %d", code)
+	}
+	plain, _ := p.newSession(newUpstream(loopbackPolicy(), top, &mediaReq{}), dev)
+	if _, ok := p.dirURL(plain, top); !ok {
+		t.Error("without cookies the top directory is an ordinary grant")
+	}
+}
+
+// Issue 3: Referer and Origin are decided again for every redirect.
+func TestRedirectReferrer(t *testing.T) {
+	type seen struct{ referer, origin string }
+	got := make(chan seen, 1)
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- seen{r.Header.Get("Referer"), r.Header.Get("Origin")}
+	}))
+	defer cdn.Close()
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v.mp4" && r.Header.Get("Referer") != "http://"+r.Host+"/watch/1?user=me" {
+			t.Errorf("the page's own host gets the full Referer, got %q", r.Header.Get("Referer"))
+		}
+		http.Redirect(w, r, cdn.URL+"/signed.mp4?sig=SECRET2", http.StatusFound)
+	}))
+	defer site.Close()
+	ctx := context.Background()
+	u, _ := url.Parse(site.URL + "/v.mp4?sig=SECRET1")
+
+	up := newUpstream(loopbackPolicy(), u, &mediaReq{Referer: site.URL + "/watch/1?user=me"})
+	resp, err := up.get(ctx, http.MethodGet, u.String(), nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if s := <-got; s.referer != site.URL+"/" || s.origin != site.URL {
+		t.Errorf("second host saw Referer %q Origin %q, want the bare origin", s.referer, s.origin)
+	}
+
+	// No Referer intended: net/http must not invent one from the signed URL.
+	for _, creds := range []bool{true, false} {
+		up = newUpstream(loopbackPolicy(), u, &mediaReq{})
+		if resp, err = up.get(ctx, http.MethodGet, site.URL+"/x.mp4?sig=SECRET1", http.Header{"Origin": {receiverOrigin}}, creds); err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if s := <-got; s.referer != "" {
+			t.Errorf("creds=%v: destination saw an invented Referer %q", creds, s.referer)
+		}
 	}
 }
 

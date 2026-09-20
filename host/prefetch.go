@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io"
+	"mime"
 	"net/http"
 	"sync"
 	"time"
@@ -119,6 +120,10 @@ func (pf *prefetcher) kick(s *session, current string) {
 		}
 		body, err := io.ReadAll(io.LimitReader(resp.Body, pfMaxItem+1))
 		if err != nil || len(body) > pfMaxItem {
+			return
+		}
+		// Same rule as forward: the TV's own request then gets the refusal.
+		if mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); isDocument(mt, body[:min(len(body), 512)]) {
 			return
 		}
 		hdr := resp.Header.Clone()

@@ -337,7 +337,16 @@ func (h *host) plan(ctx context.Context, devIP netip.Addr, up *upstream, u *url.
 	if err != nil {
 		return nil, err
 	}
-	return &mediaPlan{mode: "proxy", contentID: p.entryURL(s, u, r.info.kind), mediaInfo: *r.info, sess: s}, nil
+	s.private = m.Mode == "proxy"
+	if r.info.kind == "dash" {
+		// Said here, where the popup can show it. The rewriter refuses the same
+		// thing later, for a manifest reached through a redirect.
+		if _, ok := p.dirURL(s, u); !ok {
+			p.drop(s)
+			return nil, &codedErr{"UPSTREAM", u.Hostname() + " serves this DASH stream from its top directory. Relaying that with your cookies would open the whole site to the TV's network, so XCast does not."}
+		}
+	}
+	return &mediaPlan{mode: "proxy", contentID: p.entryURL(s, u), mediaInfo: *r.info, sess: s}, nil
 }
 
 func (h *host) ensureProxy(dev netip.Addr) (*proxy, error) {
