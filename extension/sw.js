@@ -118,10 +118,17 @@ function onHostMessage(m) {
     armIdle();
   }
   if (m.type === 'media') {
-    // The TV gives the duration only with a video's first report, and a
-    // position only when something changes. Keep the one and date the other,
-    // so that a popup (also one opened later) can tell where playback is now.
-    m = { ...m, duration: m.duration ?? lastMedia?.duration, at: Date.now() };
+    // The TV gives the duration and the track list only with a video's first
+    // report, and a position only when something changes. Keep the former and
+    // date the latter, so that a popup (also one opened later) can tell where
+    // playback is now and which subtitles there are.
+    m = {
+      ...m,
+      duration: m.duration ?? lastMedia?.duration,
+      tracks: m.tracks ?? lastMedia?.tracks,
+      activeTrackIds: m.activeTrackIds ?? lastMedia?.activeTrackIds,
+      at: Date.now(),
+    };
     lastMedia = m;
     if (m.state === 'IDLE' && FINAL_IDLE.has(m.idleReason)) {
       active = false;
@@ -172,7 +179,7 @@ async function handle(msg) {
     }
     case 'control':
       try {
-        return await call({ type: 'control', action: msg.action, value: msg.value ?? 0 }, 10_000);
+        return await call({ type: 'control', action: msg.action, value: msg.value ?? 0, trackIds: msg.trackIds }, 10_000);
       } finally {
         // Even if the TV never answered: Stop must always take the helper and
         // its proxy down.

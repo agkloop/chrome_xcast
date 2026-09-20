@@ -39,6 +39,7 @@ type request struct {
 	Media     *mediaReq  `json:"media,omitempty"`
 	Action    string     `json:"action,omitempty"`
 	Value     float64    `json:"value,omitempty"`
+	TrackIDs  []int64    `json:"trackIds,omitempty"`
 	TimeoutMs int        `json:"timeoutMs,omitempty"`
 }
 

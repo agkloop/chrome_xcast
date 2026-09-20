@@ -138,6 +138,9 @@ func (h *host) dispatch(ctx context.Context, req request) (map[string]any, error
 	case "cast":
 		return h.castMedia(ctx, req.Device, req.Media)
 	case "control":
+		if req.Action == "tracks" {
+			return nil, h.setTracks(ctx, req.TrackIDs)
+		}
 		return nil, h.control(ctx, req.Action, req.Value)
 	case "forget":
 		// Only after the user confirmed they replaced or factory-reset the TV.
@@ -514,12 +517,19 @@ func (h *host) onCastEvent(typ string, raw json.RawMessage) {
 	case "MEDIA_STATUS":
 		var st struct {
 			Status []struct {
-				MediaSessionID int64   `json:"mediaSessionId"`
-				PlayerState    string  `json:"playerState"`
-				IdleReason     string  `json:"idleReason"`
-				CurrentTime    float64 `json:"currentTime"`
+				MediaSessionID int64    `json:"mediaSessionId"`
+				PlayerState    string   `json:"playerState"`
+				IdleReason     string   `json:"idleReason"`
+				CurrentTime    float64  `json:"currentTime"`
+				ActiveTrackIDs *[]int64 `json:"activeTrackIds"`
 				Media          *struct {
 					Duration float64 `json:"duration"`
+					Tracks   []struct {
+						ID       int64  `json:"trackId"`
+						Type     string `json:"type"`
+						Name     string `json:"name"`
+						Language string `json:"language"`
+					} `json:"tracks"`
 				} `json:"media"`
 			} `json:"status"`
 		}
@@ -537,6 +547,18 @@ func (h *host) onCastEvent(typ string, raw json.RawMessage) {
 		ev := map[string]any{"type": "media", "state": s.PlayerState, "currentTime": s.CurrentTime, "idleReason": s.IdleReason}
 		if s.Media != nil {
 			ev["duration"] = s.Media.Duration
+			// Subtitle and audio tracks the TV found in the stream. Their names
+			// come from the site's manifest: bounded here, shown as text only.
+			tracks := []map[string]any{}
+			for _, t := range s.Media.Tracks {
+				if (t.Type == "TEXT" || t.Type == "AUDIO") && len(tracks) < maxTracks {
+					tracks = append(tracks, map[string]any{"id": t.ID, "type": t.Type, "name": clip(t.Name, 64), "language": clip(t.Language, 16)})
+				}
+			}
+			ev["tracks"] = tracks
+		}
+		if s.ActiveTrackIDs != nil {
+			ev["activeTrackIds"] = *s.ActiveTrackIDs
 		}
 		h.emit(ev)
 	case "RECEIVER_STATUS":
@@ -552,6 +574,35 @@ func (h *host) onCastEvent(typ string, raw json.RawMessage) {
 			h.emit(map[string]any{"type": "volume", "level": st.Status.Volume.Level, "muted": st.Status.Volume.Muted})
 		}
 	}
+}
+
+const maxTracks = 64
+
+// clip bounds a string from the TV to n characters.
+func clip(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
+}
+
+// setTracks switches subtitle and audio tracks: ids lists every track that
+// should be on (none: subtitles off, the default audio stays).
+func (h *host) setTracks(ctx context.Context, ids []int64) error {
+	h.mu.Lock()
+	cc, app, msid := h.cc, h.app, h.msid
+	h.mu.Unlock()
+	if cc == nil || app == nil || !cc.alive() {
+		return &codedErr{"NO_SESSION", "nothing is casting"}
+	}
+	if len(ids) > 8 {
+		return bad("too many tracks")
+	}
+	if ids == nil {
+		ids = []int64{} // the TV wants a list, not null
+	}
+	_, err := cc.mediaCmd(ctx, app, map[string]any{"type": "EDIT_TRACKS_INFO", "mediaSessionId": msid, "activeTrackIds": ids})
+	return err
 }
 
 func (h *host) control(ctx context.Context, action string, v float64) error {
