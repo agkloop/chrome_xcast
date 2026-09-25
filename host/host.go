@@ -63,9 +63,13 @@ type host struct {
 
 	metrics     *castMetrics
 	metricsOnce sync.Once
+
+	awake *waker // keeps the computer up while the TV reads from it
 }
 
-func newHost(emit func(any)) *host { return &host{emit: emit, pins: defaultPinStore()} }
+func newHost(emit func(any)) *host {
+	return &host{emit: emit, pins: defaultPinStore(), awake: newWaker()}
+}
 
 const loadTimeout = 20 * time.Second
 
@@ -265,6 +269,7 @@ func (h *host) castMedia(ctx context.Context, d *deviceRef, m *mediaReq) (map[st
 		h.mu.Unlock()
 		if switched {
 			h.proxyDo(func(p *proxy) { p.keepOnly(nil) })
+			h.awake.release()
 		}
 	}
 	if planErr != nil {
@@ -308,6 +313,11 @@ func (h *host) castMedia(ctx context.Context, d *deviceRef, m *mediaReq) (map[st
 	h.proxyDo(func(p *proxy) { p.keepOnly(plan.sess) })
 	if plan.sess == nil {
 		up.client.CloseIdleConnections()
+	}
+	if plan.mode == "proxy" {
+		h.awake.hold()
+	} else {
+		h.awake.release()
 	}
 	h.mu.Lock()
 	h.app, h.msid, h.metrics = app, msid, cm
@@ -518,6 +528,7 @@ func (h *host) onCastClosed(c *castConn) {
 		return
 	}
 	h.proxyDo(func(p *proxy) { p.keepOnly(nil) })
+	h.awake.release()
 	h.emit(map[string]any{"type": "disconnected", "reason": "lost connection to the TV"})
 }
 
@@ -582,8 +593,19 @@ func (h *host) onCastEvent(typ string, raw json.RawMessage) {
 			h.msid = s.MediaSessionID
 		}
 		m := h.metrics
+		relayed := m != nil && m.mode == "proxy" && h.app != nil
 		h.mu.Unlock()
 		m.noteState(s.PlayerState)
+		if relayed {
+			switch s.PlayerState {
+			case "PLAYING", "BUFFERING":
+				h.awake.hold()
+			case "PAUSED":
+				h.awake.releaseIn(pauseAwake)
+			case "IDLE":
+				h.awake.release()
+			}
+		}
 		ev := map[string]any{"type": "media", "state": s.PlayerState, "currentTime": s.CurrentTime, "idleReason": s.IdleReason}
 		if s.Media != nil {
 			ev["duration"] = s.Media.Duration
@@ -688,6 +710,7 @@ func (h *host) control(ctx context.Context, action string, v float64) error {
 		h.app = nil
 		h.mu.Unlock()
 		h.proxyDo(func(p *proxy) { p.keepOnly(nil) }) // revoke the proxy immediately
+		h.awake.release()
 	default:
 		return bad("unknown action")
 	}
@@ -704,4 +727,5 @@ func (h *host) shutdown() {
 	if h.prox != nil {
 		h.prox.Close()
 	}
+	h.awake.release()
 }

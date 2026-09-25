@@ -1,14 +1,22 @@
 ;; macOS sandbox for xcast-host: deny everything, then allow only what a
 ;; network relay needs. The helper parses hostile input (playlists, mDNS,
 ;; Cast replies); if a parser bug is ever exploited, the attacker lands in a
-;; process that cannot read your files, cannot start other programs and can
-;; write only to its own small data folder.
+;; process that cannot read your files, cannot start other programs (except
+;; caffeinate, below) and can write only to its own small data folder.
 (version 1)
 (deny default)
 (import "system.sb")
 
 (allow process-exec (literal (param "BIN")))
 (allow file-read* (literal (param "BIN")))
+;; Keeping the computer awake while the TV reads from it (host/awake.go):
+;; /usr/bin/caffeinate, which runs in this same sandbox, the power management
+;; service it asks, and stopping it again. At worst it keeps the computer from
+;; idle sleep; no other program can be started.
+(allow process-fork)
+(allow process-exec (literal "/usr/bin/caffeinate"))
+(allow signal (target children))
+(allow mach-lookup (global-name "com.apple.PowerManagement.control"))
 ;; macOS's certificate verifier looks up the program's own folder before it
 ;; will check any TLS certificate. Metadata only (stat): no listing, no contents.
 (allow file-read-metadata (literal (param "DIR")))
