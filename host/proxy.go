@@ -542,7 +542,7 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request, s *session, targ
 		case strings.Contains(mt, "mpegurl") || bytes.HasPrefix(bytes.TrimLeft(head, "\ufeff \t\r\n"), []byte("#EXTM3U")):
 			serveRewritten(w, body, "application/vnd.apple.mpegurl", func(b []byte) []byte {
 				out, segments := rewriteHLS(b, final, file)
-				s.pf.learn(segments)
+				s.pf.learn(target, segments)
 				return out
 			})
 			return
@@ -572,7 +572,7 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request, s *session, targ
 			s.m.segments.Add(1)
 		}
 	}
-	_, _ = io.Copy(countingWriter{w, s.m}, body)
+	relayBody(countingWriter{w, s.m}, body, cancel)
 }
 
 var passHeaders = [...]string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "Etag", "Cache-Control", "Expires"}

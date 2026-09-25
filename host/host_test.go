@@ -700,6 +700,7 @@ var testRootKey, testRootCert = func() (*rsa.PrivateKey, *x509.Certificate) {
 func TestMain(m *testing.M) {
 	castRoots = x509.NewCertPool()
 	castRoots.AddCert(testRootCert)
+	awakeStart = func() func() { return func() {} } // no caffeinate from tests
 	os.Exit(m.Run())
 }
 

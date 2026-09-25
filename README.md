@@ -60,7 +60,7 @@ Chrome's **Cast tab** records the tab, re-encodes it live and streams that recor
 | Picture | Re-encoded copy of your screen area | The source stream, the TV's own decoder, the stream's own quality ladder |
 | Computer load | Encodes video the whole time | Close to none (direct), or plain network traffic (relay) |
 | The tab | Must stay open and keep rendering | Can be closed or reused |
-| Computer sleeps | Casting stops | Direct: the TV keeps playing. Relay: it stops |
+| Computer sleeps | Casting stops | Direct: the TV keeps playing. Relay: XCast keeps the computer awake while it plays; closing a laptop's lid still stops it |
 | On the TV | The whole page: controls, overlays, cursor | Only the video |
 | Controls | The page's own, with lag | The popup, the TV remote, or any Cast controller |
 | Works for | Anything Chrome can show, including DRM sites | Streams XCast can find and the TV can decode. **No DRM** |
@@ -82,6 +82,8 @@ Use Cast tab for Netflix and friends, for pages that are not a video, or where n
 - The connection to a TV you have used before is made when the popup opens, so Cast does not wait for the handshake. Nothing is started on the TV until you press Cast.
 - Site logins: your cookies are sent only if you say yes, per pair of page and video host, with a louder warning when the two differ.
 - If the control connection drops, the helper reconnects (after 1, 3 and 8 seconds) and rejoins the running player.
+- The relay reads ahead of the TV: the next four segments of each HLS playlist, two at a time, and up to 16 MB of a video file, so a slow moment at the site does not reach the screen. What the TV skips past (a seek, another quality) is dropped at once.
+- While the TV reads from this computer (relay, or a file from the command line), the computer does not go to idle sleep, until 30 minutes into a pause. The display may still sleep.
 
 **The remote**
 - TV name, a state pill (playing, paused, buffering; relayed or direct), a progress bar that seeks on click and with the arrow keys, back 10 s, play/pause, forward 30 s, stop, volume.
@@ -102,7 +104,7 @@ Use Cast tab for Netflix and friends, for pages that are not a video, or where n
 
 **Security**
 - The TV must prove it is a genuine Cast device (certificate chain to Google's Cast root), and the same one as last time (identity pinned on first use).
-- The helper runs in a macOS sandbox: it cannot read your files or start other programs. It is built from source on your machine.
+- The helper runs in a macOS sandbox: it cannot read your files or start other programs (except `caffeinate`, which keeps the computer awake while relaying). It is built from source on your machine.
 - The relay serves only the TV's address, only URLs the helper itself issued, only `GET`/`HEAD`, and only media: pages, JSON, scripts and error bodies are never handed out.
 - Upstream connections are checked at dial time, redirects and DNS rebinding included: no pivot into your LAN.
 - The extension's pages run under a strict Content Security Policy with Trusted Types; page-controlled and network-controlled strings are only ever shown as text.
@@ -159,7 +161,7 @@ sequenceDiagram
     H->>TV: LOAD a tokenised address on the helper
     TV->>H: playlist, segments
     H->>S: same requests, with your browser's headers
-    Note over H,S: manifests rewritten so every URL comes back through the relay<br/>next segment fetched ahead, one retry upstream
+    Note over H,S: manifests rewritten so every URL comes back through the relay<br/>next four segments fetched ahead, one retry upstream
   end
   TV-->>P: state, position, tracks (via helper)
   H-->>P: stats, once a second
@@ -265,6 +267,7 @@ Playing  0:00 / 1:34:00
 | "Site needs your login" | The stream wants your cookies. Read what the link under the Cast button says, in particular when it warns that the video is on another host than the page. |
 | "This is NOT the TV used before" | The TV's identity changed. Only continue if you replaced or factory-reset it. |
 | "… serves this DASH stream from its top directory" | With your cookies in play, XCast refuses a relay grant that would cover the whole site. |
+| Playback stops to buffer | Open **Stats for this cast**. Direct, with stalls: the TV's own Wi-Fi or the site is too slow; put the TV on 5 GHz, near the router. Relayed: the video crosses Wi-Fi three times (router to computer, computer to router, router to TV); a cable on the computer fixes most of it, and turning off **Private relay** lets more sites play direct. |
 | No Subtitles picker | The picker lists the tracks the TV found *in the stream*. Subtitles a page adds on its own, outside the stream, are not carried over. |
 
 ## Security and privacy
@@ -293,7 +296,7 @@ What XCast does **not** protect against is in the same documents, plainly: the r
 | Part | What it does |
 |---|---|
 | [`extension/`](extension) | Chrome MV3 extension, plain JavaScript, no dependencies, no build step. `popup.js` finds the video and is the remote; `sw.js` owns the helper connection, which has to outlive the popup; `watch.js` records stream requests from page load on sites you chose. |
-| [`host/`](host) | The helper, in Go, standard library only: discovery (`mdns.go`), the Cast protocol and device authentication (`cast.go`, `auth.go`, `chain.go`), stream probing and planning (`media.go`, `host.go`), the relay (`proxy.go`, `prefetch.go`), network policy (`netsec.go`), stats (`metrics.go`). |
+| [`host/`](host) | The helper, in Go, standard library only: discovery (`mdns.go`), the Cast protocol and device authentication (`cast.go`, `auth.go`, `chain.go`), stream probing and planning (`media.go`, `host.go`), the relay and its read-ahead (`proxy.go`, `prefetch.go`, `ahead.go`), keeping the computer awake (`awake.go`), network policy (`netsec.go`), stats (`metrics.go`). |
 | [`install/`](install) | The macOS installer and the sandbox profile the helper runs in. |
 | [`testlab/`](testlab) | Local pages that imitate real player setups (cross-origin iframe, `blob:` player behind a Referer check, signed expiring MP4), with generated video. |
 | [`docs/`](docs) | How it works, the security model, and the logo. |
